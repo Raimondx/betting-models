@@ -482,12 +482,23 @@
                 </div>
 
                 <label class="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer mt-4">
-                    <input type="checkbox" id="ouAhIncludeOTToggle" autocomplete="off" checked onchange="toggleOuAhIncludeOT(this.checked)" class="rounded border-slate-300">
-                    Över/Under och handikapp avgörs inklusive förlängning/straffar
+                    <input type="checkbox" id="ouIncludeOTToggle" autocomplete="off" checked onchange="toggleOuIncludeOT(this.checked)" class="rounded border-slate-300">
+                    Över/Under avgörs inklusive förlängning/straffar
                 </label>
                 <p class="text-[11px] text-slate-500 mt-1">
-                    Standard hos i stort sett alla bookmakers: totalen och pucklinen räknar med det avgörande
-                    målet. Avmarkera bara om du spelar uttalade "60 minuter"-varianter av dessa marknader.
+                    Standard hos i stort sett alla bookmakers: totalen räknar med det avgörande målet.
+                    Avmarkera bara om du spelar en uttalad "60 minuter"-total.
+                </p>
+
+                <label class="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer mt-4">
+                    <input type="checkbox" id="ahIncludeOTToggle" autocomplete="off" onchange="toggleAhIncludeOT(this.checked)" class="rounded border-slate-300">
+                    Handikapp/puckline avgörs inklusive förlängning/straffar
+                </label>
+                <p class="text-[11px] text-slate-500 mt-1">
+                    Separat från totalen med flit: de två marknaderna behöver inte avgöras i samma tidsrymd,
+                    och skillnaden är stor just för handikapp. Inklusive förlängning slutar varje oavgjord
+                    match på exakt ±1 mål, vilket tar bort pushen på 0 (DNB) helt och flyttar massa till
+                    ±1-linjerna. Standard här är <strong>60 minuter</strong>.
                 </p>
             </div>
 
@@ -1882,7 +1893,8 @@
             otHomeEdge: 52,            // Hemmalagets andel av vinsterna i förlängning/straffar (%)
             otStrengthWeight: 15,      // Hur mycket lagstyrkan får luta förlängningsutfallet (0 = rent myntkast)
             tieBoost: 1.00,            // Multiplikator på oavgjort-diagonalen i ordinarie tid
-            ouAhIncludeOT: true,       // Ö/U och handikapp avgörs inklusive förlängning/straffar
+            ouIncludeOT: true,         // Ö/U avgörs inklusive förlängning/straffar
+            ahIncludeOT: false,        // Handikapp/puckline avgörs efter ordinarie tid (60 min)
             pointsPerGame: 3           // Max poäng per match i ligans poängsystem (NHL = 2, SHL/Liiga/KHL = 3)
         };
 
@@ -1900,7 +1912,7 @@
             lsSet(MODEL_SETTINGS_KEY, JSON.stringify({
                 xgWeight, drawProbability, homeAdvantage, dixonColesRho, shrinkageK,
                 recencyWeightingEnabled, recencyHalfLifeDays, autoDrawFromPoisson, devigMethod, minEdgePct, modelToggles,
-                dataIncludesOT, otGoalsPerGame, otHomeEdge, otStrengthWeight, tieBoost, ouAhIncludeOT, pointsPerGame
+                dataIncludesOT, otGoalsPerGame, otHomeEdge, otStrengthWeight, tieBoost, ouIncludeOT, ahIncludeOT, pointsPerGame
             }));
         }
 
@@ -1939,7 +1951,16 @@
         let otStrengthWeight = Number(_settings.otStrengthWeight);
         if (!isFinite(otStrengthWeight) || otStrengthWeight < 0) otStrengthWeight = 15;
         let tieBoost = Number(_settings.tieBoost) || 1.00;
-        let ouAhIncludeOT = _settings.ouAhIncludeOT !== false;
+        // Ö/U och handikapp hade tidigare EN gemensam inställning (ouAhIncludeOT). De är nu åtskilda:
+        // en total och en puckline behöver inte avgöras i samma tidsrymd, och för handikapp är skillnaden
+        // stor. Inklusive förlängning slutar varje match som stod lika på exakt ±1 mål, så pushen på
+        // 0 (DNB) försvinner helt och massa flyttas till ±1-linjerna.
+        // Migrering: en sparad ouAhIncludeOT gäller fortsatt totalen, så den marknaden beter sig som förut.
+        // Handikappet börjar på 60 minuter oavsett vad den gamla gemensamma inställningen stod på.
+        let ouIncludeOT = (_settings.ouIncludeOT !== undefined)
+            ? _settings.ouIncludeOT !== false
+            : _settings.ouAhIncludeOT !== false;
+        let ahIncludeOT = _settings.ahIncludeOT === true;
         let pointsPerGame = Number(_settings.pointsPerGame) || 3;
 
         let lastSweepResult = null;  // Senaste resultatet från backtestSweep(), används av applySweepResult()
@@ -2720,8 +2741,16 @@
             calculateAllModels();
         }
 
-        function toggleOuAhIncludeOT(checked) {
-            ouAhIncludeOT = !!checked;
+        function toggleOuIncludeOT(checked) {
+            ouIncludeOT = !!checked;
+            saveModelSettings();
+            calculateAllModels();
+        }
+
+        // Handikappet ingår inte i Modell 4:s lösare (den matchar bara 1X2 + Ö/U mot marknaden), så till
+        // skillnad från Ö/U-inställningen behöver den här inte röra marknadscachen.
+        function toggleAhIncludeOT(checked) {
+            ahIncludeOT = !!checked;
             saveModelSettings();
             calculateAllModels();
         }
@@ -3294,7 +3323,7 @@
 
             // Totalen visas för hockeyns vanligaste linje (5.5) och räknas på SLUTRESULTAT-matrisen,
             // eftersom totaler avgörs inklusive förlängning/straffar.
-            const totalsMatrix = ouAhIncludeOT ? currentPoissonFtMatrix : currentPoissonMatrix;
+            const totalsMatrix = ouIncludeOT ? currentPoissonFtMatrix : currentPoissonMatrix;
             let pOver25 = 0, pUnder25 = 0;
             for (let h = 0; h <= 12; h++) {
                 for (let a = 0; a <= 12; a++) {
@@ -3519,7 +3548,7 @@
             // P(över | inte exakt på linjen). Modellens motsvarighet måste jämföras på samma villkor.
             // Totalen avgörs dessutom inklusive förlängning, så jämförelsen görs mot slutresultatmatrisen.
             const ftMatrix = applyOvertimeLayer(grid.matrix, computeOTWinProbability(lambdaHome, lambdaAway));
-            const ou = getOUProbabilities(targets.ouLine, ouAhIncludeOT ? ftMatrix : grid.matrix);
+            const ou = getOUProbabilities(targets.ouLine, ouIncludeOT ? ftMatrix : grid.matrix);
 
             const dH = grid.h - targets.pHome;
             const dD = grid.d - targets.pDraw;
@@ -3540,7 +3569,7 @@
         }
 
         function solveMarketImpliedLambdasCached(cacheKey, targetPHome, targetPDraw, targetPAway, targetPOver, ouLine, rho) {
-            const key = `${cacheKey}|${rho}|${ouLine}|${tieBoost}|${ouAhIncludeOT}|${targetPHome.toFixed(6)}|${targetPDraw.toFixed(6)}|${targetPOver.toFixed(6)}`;
+            const key = `${cacheKey}|${rho}|${ouLine}|${tieBoost}|${ouIncludeOT}|${targetPHome.toFixed(6)}|${targetPDraw.toFixed(6)}|${targetPOver.toFixed(6)}`;
             if (marketSolveCache.has(key)) return marketSolveCache.get(key);
             const solved = solveMarketImpliedLambdas(targetPHome, targetPDraw, targetPAway, targetPOver, ouLine, rho);
             marketSolveCache.set(key, solved);
@@ -4214,12 +4243,14 @@
         // Vilken målmatris ska marknaden läsas ur?
         //   1X2  -> ORDINARIE TID. Det är "60 minuter"-marknaden, den enda där oavgjort finns.
         //   ML   -> SLUTRESULTAT, alltid (moneyline avgörs efter förlängning/straffar).
-        //   Ö/U och handikapp -> styrs av inställningen ouAhIncludeOT. Standardmarknaderna (totaler och
-        //          puckline) avgörs inklusive förlängning, men det finns även "60 minuter"-varianter.
+        //   Ö/U   -> styrs av ouIncludeOT (standard: inklusive förlängning, som hos bookmakers).
+        //   AH    -> styrs av ahIncludeOT (standard: 60 minuter). Egen inställning eftersom tidsrymden
+        //          påverkar handikappet mycket kraftigare än totalen.
         function matrixForBetType(betType) {
             if (betType === '1X2') return getBlendedAHOUMatrix(false);
             if (betType === 'ML') return getBlendedAHOUMatrix(true);
-            return getBlendedAHOUMatrix(ouAhIncludeOT);
+            if (betType === 'OU') return getBlendedAHOUMatrix(ouIncludeOT);
+            return getBlendedAHOUMatrix(ahIncludeOT);
         }
 
         // Väger ihop insatsfördelningen över hela målmatrisen till spelvalets fulla utfallsprofil.
@@ -4481,7 +4512,8 @@
             // Ö/U och Asian Handicap: bygger på en (eventuellt blandad) målmatris från Modell 1 och/eller
             // Modell 4 - se getBlendedAHOUMatrix(). Standardmarknaderna avgörs INKLUSIVE förlängning, så
             // slutresultatmatrisen används om inte inställningen säger något annat.
-            const ahouMatrix = getBlendedAHOUMatrix(ouAhIncludeOT);
+            const ouMatrix = getBlendedAHOUMatrix(ouIncludeOT);
+            const ahMatrix = getBlendedAHOUMatrix(ahIncludeOT);
 
             // Över / Under - täcker både fotbollens (låga) och hockeyns (höga) typiska mållinjer
             const ouLimits = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0, 3.25, 3.5, 3.75, 4.0, 4.25, 4.5, 4.75, 5.0, 5.25, 5.5, 5.75, 6.0, 6.25, 6.5, 6.75, 7.0, 7.25, 7.5, 7.75, 8.0, 8.5];
@@ -4494,8 +4526,8 @@
 
                 // Visar det RÄTTVISA oddset (break-even) i stället för 1/sannolikhet. På heltalslinjer, där
                 // en del av insatsen kommer tillbaka som push, är de två inte samma sak.
-                const over = evaluateSelection('OU', `Over_${limit}`, ahouMatrix);
-                const under = evaluateSelection('OU', `Under_${limit}`, ahouMatrix);
+                const over = evaluateSelection('OU', `Over_${limit}`, ouMatrix);
+                const under = evaluateSelection('OU', `Under_${limit}`, ouMatrix);
                 const pushNote = over.pushProb > 0.0005
                     ? ` <span class="text-slate-400 font-normal" title="Andel av insatsen som betalas tillbaka (push)">(push ${(over.pushProb*100).toFixed(1)}%)</span>`
                     : '';
@@ -4523,8 +4555,8 @@
                 if (!(L === -2.5 || L === -2.0 || L === -1.5 || L === -1.0 || L === -0.5 || L === 0
                     || L === 0.5 || L === 1.0 || L === 1.5 || L === 2.0 || L === 2.5)) return;
 
-                const home = evaluateSelection('AH', `AH_Home_${L}`, ahouMatrix);
-                const away = evaluateSelection('AH', `AH_Away_${L}`, ahouMatrix);
+                const home = evaluateSelection('AH', `AH_Home_${L}`, ahMatrix);
+                const away = evaluateSelection('AH', `AH_Away_${L}`, ahMatrix);
                 // Puckline i hockey ligger nästan alltid på ±1.5 - markera den raden.
                 const puckNote = (L === -1.5 || L === 1.5) ? ' <span class="text-indigo-500 font-normal">(puckline)</span>' : '';
                 const displayL = L > 0 ? `+${L}` : (L === 0 ? `0 (DNB)` : `${L}`);
@@ -4559,9 +4591,10 @@
                 } else {
                     ahouStatus.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-500 mr-1"></i> Baseras just nu på en blandning: ${pPct}% Modell 1 (Poisson) + ${mPct}% Modell 4 (Marknad), viktat efter samma träffsäkerhet (Brier Score) som styr snittet ovan.`;
                 }
-                ahouStatus.innerHTML += ouAhIncludeOT
-                    ? ` <span class="text-slate-500">Linjerna avgörs <strong>inklusive förlängning/straffar</strong> - därför används slutresultatmatrisen.</span>`
-                    : ` <span class="text-slate-500">Linjerna avgörs <strong>efter ordinarie tid (60 min)</strong> - därför används 60-minutersmatrisen.</span>`;
+                const scopeWord = on => on
+                    ? 'inklusive förlängning/straffar'
+                    : 'efter ordinarie tid (60 min)';
+                ahouStatus.innerHTML += ` <span class="text-slate-500">Över/Under avgörs <strong>${scopeWord(ouIncludeOT)}</strong>, handikapp/puckline <strong>${scopeWord(ahIncludeOT)}</strong>.</span>`;
             }
 
             updateBetTypeMarkets();
@@ -4805,9 +4838,12 @@
                 let scope;
                 if (betType === 'ML') scope = 'Avgörs <strong>inklusive förlängning/straffar</strong>.';
                 else if (betType === '1X2') scope = 'Avgörs <strong>efter ordinarie tid (60 min)</strong> - oavgjort är ett giltigt utfall.';
-                else scope = ouAhIncludeOT
-                    ? 'Avgörs <strong>inklusive förlängning/straffar</strong> (ändra i Avancerade modellparametrar om din bookmaker gör annorlunda).'
-                    : 'Avgörs <strong>efter ordinarie tid (60 min)</strong>.';
+                else {
+                    const includesOT = betType === 'OU' ? ouIncludeOT : ahIncludeOT;
+                    scope = includesOT
+                        ? 'Avgörs <strong>inklusive förlängning/straffar</strong> (ändra i Avancerade modellparametrar om din bookmaker gör annorlunda).'
+                        : 'Avgörs <strong>efter ordinarie tid (60 min)</strong> (ändra i Avancerade modellparametrar om din bookmaker gör annorlunda).';
+                }
                 scopeEl.innerHTML = `<i class="fa-solid fa-clock text-slate-400 mr-1"></i> ${scope}`;
             }
 
@@ -4987,6 +5023,10 @@
                 modelProbOver: savedProbOver, // Sparat för Brier & Log Loss
                 probsByModel: savedProbsByModel, // Sparat för dynamisk modellviktning
                 snapshotHome, snapshotAway, snapshotLeague, snapshotXgWeight, snapshotHomeAdvantage, snapshotAdjustments, // Sparat för ρ/k-optimering
+                // Tidsrymden marknaden prissattes i. Ett handikappspel taget som "60 minuter" får inte
+                // läsas om senare som om det avgjordes inklusive förlängning - sannolikheterna är helt
+                // olika, särskilt på 0 (DNB) och ±1.
+                snapshotScopeIncludesOT: (betType === 'OU') ? ouIncludeOT : ((betType === 'AH') ? ahIncludeOT : null),
                 ev: ev,
                 stake: stake,
                 closingOdds: closingOdds,
@@ -6458,7 +6498,7 @@
                     modelSettings: {
                         xgWeight, drawProbability, homeAdvantage, dixonColesRho, shrinkageK,
                         recencyWeightingEnabled, recencyHalfLifeDays, autoDrawFromPoisson, devigMethod, minEdgePct, modelToggles,
-                        dataIncludesOT, otGoalsPerGame, otHomeEdge, otStrengthWeight, tieBoost, ouAhIncludeOT, pointsPerGame
+                        dataIncludesOT, otGoalsPerGame, otHomeEdge, otStrengthWeight, tieBoost, ouIncludeOT, ahIncludeOT, pointsPerGame
                     }
                 }
             };
@@ -6540,7 +6580,8 @@
                         otStrengthWeight = Number(ms.otStrengthWeight);
                         if (!isFinite(otStrengthWeight) || otStrengthWeight < 0) otStrengthWeight = 15;
                         tieBoost = Number(ms.tieBoost) || 1.00;
-                        ouAhIncludeOT = ms.ouAhIncludeOT !== false;
+                        ouIncludeOT = (ms.ouIncludeOT !== undefined) ? ms.ouIncludeOT !== false : ms.ouAhIncludeOT !== false;
+                        ahIncludeOT = ms.ahIncludeOT === true;
                         pointsPerGame = Number(ms.pointsPerGame) || 3;
                         saveModelSettings();
                     }
@@ -6592,7 +6633,7 @@
                 'drawProbSlider', 'drawProbSlider3', 'recencyHalfLifeSlider', 'recencyEnabledToggle',
                 'autoDrawToggle', 'devigMethodSelect', 'minEdgeInput',
                 'dataIncludesOTToggle', 'otGoalsSlider', 'otHomeEdgeSlider', 'otStrengthWeightSlider',
-                'tieBoostSlider', 'ouAhIncludeOTToggle', 'pointsPerGameSelect',
+                'tieBoostSlider', 'ouIncludeOTToggle', 'ahIncludeOTToggle', 'pointsPerGameSelect',
                 'kellyFractionSlider', 'startingBankrollInput', 'clvMarginInput'
             ];
             controlIds.forEach(id => {
@@ -6651,8 +6692,10 @@
             setVal('tieBoostSlider', Math.round(tieBoost * 100));
             setTxt('labelTieBoost', tieBoost.toFixed(2));
 
-            const ouAhEl = document.getElementById('ouAhIncludeOTToggle');
-            if (ouAhEl) ouAhEl.checked = ouAhIncludeOT;
+            const ouOtEl = document.getElementById('ouIncludeOTToggle');
+            if (ouOtEl) ouOtEl.checked = ouIncludeOT;
+            const ahOtEl = document.getElementById('ahIncludeOTToggle');
+            if (ahOtEl) ahOtEl.checked = ahIncludeOT;
             setVal('pointsPerGameSelect', String(pointsPerGame));
 
             // Kryssrutorna för "Med i snittet" speglar det sparade valet. Måste sättas här (och inte bara
@@ -7635,7 +7678,8 @@
             otHomeEdge = Number(d.otHomeEdge);
             otStrengthWeight = Number(d.otStrengthWeight);
             tieBoost = Number(d.tieBoost);
-            ouAhIncludeOT = d.ouAhIncludeOT !== false;
+            ouIncludeOT = d.ouIncludeOT !== false;
+            ahIncludeOT = d.ahIncludeOT === true;
             pointsPerGame = Number(d.pointsPerGame);
             saveModelSettings();
             clearMarketSolveCache();

@@ -126,7 +126,19 @@ resultat k–k flyttas till (k+1)–k eller k–(k+1) beroende på vem som vinne
 
 - **1X2** läses ur 60-minutersmatrisen — det är "60 minuter"-marknaden.
 - **Moneyline** läses ur slutresultatmatrisen.
-- **Ö/U och puckline** styrs av inställningen `ouAhIncludeOT` (standard: inklusive förlängning).
+- **Ö/U** styrs av `ouIncludeOT` (standard: inklusive förlängning, som hos bookmakers).
+- **Handikapp/puckline** styrs av `ahIncludeOT` (standard: 60 minuter).
+
+De två marknaderna har **varsin** inställning, inte en gemensam. Tidsrymden betyder mycket mer för
+handikappet än för totalen: inklusive förlängning slutar varje match som stod lika på exakt ±1 mål, så
+pushen på 0 (DNB) försvinner helt och massa flyttas till ±1-linjerna, medan totalen bara skiftar med
+P(oavgjort) mål. Vid λ 2.9/2.7 blir DNB 69.1% med 16.1% push efter 60 minuter, men 67.2% helt utan
+push inklusive förlängning. En sparad `ouAhIncludeOT` från den gemensamma tiden migreras till
+`ouIncludeOT`, så totalen beter sig som förut.
+
+Procenten i tabellerna är det **rättvisa** (break-even) värdet `W/(W+L)`, inte den råa
+vinstsannolikheten — push är utbruten och står i linjekolumnen. På puckline ±1.5 finns ingen push och
+de sammanfaller; på 0 och ±1 gör de det inte.
 
 Invarianter värda att känna till vid ändringar: massan bevaras exakt, slutresultatmatrisens diagonal
 är noll, `moneyline = h + d × P(hemmavinst i förlängning)`, och förväntade totalmål ökar med **exakt**
