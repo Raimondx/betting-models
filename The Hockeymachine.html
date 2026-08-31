@@ -1181,7 +1181,7 @@
                                     <div class="text-slate-500 font-semibold">Poisson</div>
                                     <div id="weightPoisson" class="font-black text-slate-800">33.3%</div>
                                     <label class="flex items-center justify-center gap-1 mt-1.5 text-[10px] text-slate-500 cursor-pointer">
-                                        <input type="checkbox" id="toggleModelPoisson" checked onchange="toggleModelInclusion('poisson', this.checked)" class="rounded border-slate-300">
+                                        <input type="checkbox" id="toggleModelPoisson" autocomplete="off" checked onchange="toggleModelInclusion('poisson', this.checked)" class="rounded border-slate-300">
                                         Med i snittet
                                     </label>
                                 </div>
@@ -1189,7 +1189,7 @@
                                     <div class="text-slate-500 font-semibold">xPts</div>
                                     <div id="weightXpts" class="font-black text-slate-800">33.3%</div>
                                     <label class="flex items-center justify-center gap-1 mt-1.5 text-[10px] text-slate-500 cursor-pointer">
-                                        <input type="checkbox" id="toggleModelXpts" checked onchange="toggleModelInclusion('xpts', this.checked)" class="rounded border-slate-300">
+                                        <input type="checkbox" id="toggleModelXpts" autocomplete="off" checked onchange="toggleModelInclusion('xpts', this.checked)" class="rounded border-slate-300">
                                         Med i snittet
                                     </label>
                                 </div>
@@ -1197,7 +1197,7 @@
                                     <div class="text-slate-500 font-semibold">Egen %</div>
                                     <div id="weightPossible" class="font-black text-slate-800">33.3%</div>
                                     <label class="flex items-center justify-center gap-1 mt-1.5 text-[10px] text-slate-500 cursor-pointer">
-                                        <input type="checkbox" id="toggleModelPossible" checked onchange="toggleModelInclusion('possible', this.checked)" class="rounded border-slate-300">
+                                        <input type="checkbox" id="toggleModelPossible" autocomplete="off" checked onchange="toggleModelInclusion('possible', this.checked)" class="rounded border-slate-300">
                                         Med i snittet
                                     </label>
                                 </div>
@@ -1205,7 +1205,7 @@
                                     <div class="text-slate-500 font-semibold">Marknad</div>
                                     <div id="weightMarket" class="font-black text-slate-800">0.0%</div>
                                     <label class="flex items-center justify-center gap-1 mt-1.5 text-[10px] text-slate-500 cursor-pointer">
-                                        <input type="checkbox" id="toggleModelMarket" onchange="toggleModelInclusion('market', this.checked)" class="rounded border-slate-300">
+                                        <input type="checkbox" id="toggleModelMarket" autocomplete="off" onchange="toggleModelInclusion('market', this.checked)" class="rounded border-slate-300">
                                         Med i snittet
                                     </label>
                                 </div>
@@ -1875,6 +1875,7 @@
             autoDrawFromPoisson: true,
             devigMethod: 'shin',
             minEdgePct: 3,
+            modelToggles: { poisson: true, xpts: true, possible: true, market: false },
             // --- Hockeyspecifika ---
             dataIncludesOT: true,      // Måldatan (GF/GA) innehåller mål gjorda i förlängning/straffar
             otGoalsPerGame: 0.23,      // Andel matcher som avgörs efter ordinarie tid = extra mål per match
@@ -1898,7 +1899,7 @@
         function saveModelSettings() {
             lsSet(MODEL_SETTINGS_KEY, JSON.stringify({
                 xgWeight, drawProbability, homeAdvantage, dixonColesRho, shrinkageK,
-                recencyWeightingEnabled, recencyHalfLifeDays, autoDrawFromPoisson, devigMethod, minEdgePct,
+                recencyWeightingEnabled, recencyHalfLifeDays, autoDrawFromPoisson, devigMethod, minEdgePct, modelToggles,
                 dataIncludesOT, otGoalsPerGame, otHomeEdge, otStrengthWeight, tieBoost, ouAhIncludeOT, pointsPerGame
             }));
         }
@@ -2140,7 +2141,28 @@
         // vill köra utan xPts-modellen, som delvis bygger på marknadsimplicerade sannolikheter). Modellen
         // fortsätter räknas ut och visas i sin egen flik som vanligt - den utesluts bara ur ensemble-snittet.
         // "market" (Modell 4) börjar avstängd eftersom den saknar data tills du beräknat den minst en gång.
-        let modelToggles = { poisson: true, xpts: true, possible: true, market: false };
+        // Vilka modeller som ingår i snittet sparas nu i modelSettings. Tidigare låg valet bara i minnet:
+        // vid varje sidladdning slogs alla modeller på igen, medan kryssrutorna kunde stå kvar som du
+        // lämnat dem (webbläsaren återställer formulärfält EFTER att scriptet kört). Gränssnittet visade
+        // alltså "bara Modell 3" medan snittet i själva verket vägde ihop Modell 1, 2 och 3 - och X i
+        // "Snitt & Avancerat" skilde sig då från Modell 3:s egen siffra utan synlig orsak.
+        // Modell 4 tvingas alltid av vid start: den räknas bara ut på knapptryck, så resMarket är {0,0,0}
+        // tills du beräknat den, och en påslagen marknadsmodell skulle dra ner hela snittet mot noll.
+        function sanitizeModelToggles(stored) {
+            const fallback = { poisson: true, xpts: true, possible: true, market: false };
+            const src = (stored && typeof stored === 'object') ? stored : fallback;
+            const out = {
+                poisson: src.poisson !== false,
+                xpts: src.xpts !== false,
+                possible: src.possible !== false,
+                market: false
+            };
+            // Minst en modell måste vara aktiv, annars blir snittet 0% rakt igenom.
+            if (!out.poisson && !out.xpts && !out.possible) return fallback;
+            return out;
+        }
+
+        let modelToggles = sanitizeModelToggles(_settings.modelToggles);
 
         // Opartisk prediktionslogg (oberoende av om du faktiskt spelat på matchen)
         let predictionsHistory = JSON.parse(lsGet('predictionsHistory')) || [];
@@ -4384,6 +4406,7 @@
                 return;
             }
             modelToggles[key] = checked;
+            saveModelSettings();
             calculateSummaryAndMarkets();
         }
 
@@ -6434,7 +6457,7 @@
                     // men inte de inställningar den historiken faktiskt räknades fram under.
                     modelSettings: {
                         xgWeight, drawProbability, homeAdvantage, dixonColesRho, shrinkageK,
-                        recencyWeightingEnabled, recencyHalfLifeDays, autoDrawFromPoisson, devigMethod, minEdgePct,
+                        recencyWeightingEnabled, recencyHalfLifeDays, autoDrawFromPoisson, devigMethod, minEdgePct, modelToggles,
                         dataIncludesOT, otGoalsPerGame, otHomeEdge, otStrengthWeight, tieBoost, ouAhIncludeOT, pointsPerGame
                     }
                 }
@@ -6509,6 +6532,7 @@
                         devigMethod = ms.devigMethod === 'proportional' ? 'proportional' : 'shin';
                         minEdgePct = Number(ms.minEdgePct);
                         if (!isFinite(minEdgePct) || minEdgePct < 0) minEdgePct = 3;
+                        modelToggles = sanitizeModelToggles(ms.modelToggles);
                         dataIncludesOT = ms.dataIncludesOT !== false;
                         otGoalsPerGame = Number(ms.otGoalsPerGame);
                         if (!isFinite(otGoalsPerGame) || otGoalsPerGame < 0) otGoalsPerGame = 0.23;
@@ -6630,6 +6654,13 @@
             const ouAhEl = document.getElementById('ouAhIncludeOTToggle');
             if (ouAhEl) ouAhEl.checked = ouAhIncludeOT;
             setVal('pointsPerGameSelect', String(pointsPerGame));
+
+            // Kryssrutorna för "Med i snittet" speglar det sparade valet. Måste sättas här (och inte bara
+            // i markupen) eftersom modelToggles läses från localStorage.
+            Object.keys(MODEL_TOGGLE_CHECKBOX_IDS).forEach(key => {
+                const el = document.getElementById(MODEL_TOGGLE_CHECKBOX_IDS[key]);
+                if (el) el.checked = !!modelToggles[key];
+            });
 
             setVal('kellyFractionSlider', kellyFractionPct);
             setTxt('kellyFractionLabelInline', kellyFractionPct);
@@ -7598,6 +7629,7 @@
             autoDrawFromPoisson = d.autoDrawFromPoisson !== false;
             devigMethod = d.devigMethod;
             minEdgePct = Number(d.minEdgePct);
+            modelToggles = sanitizeModelToggles(d.modelToggles);
             dataIncludesOT = d.dataIncludesOT !== false;
             otGoalsPerGame = Number(d.otGoalsPerGame);
             otHomeEdge = Number(d.otHomeEdge);

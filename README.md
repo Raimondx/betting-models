@@ -60,6 +60,10 @@ Vikterna krymps mot lika vikt med `WEIGHT_PRIOR_STRENGTH = 40` pseudomatcher, s�
 från 1/n mot uppmätt träffsäkerhet i takt med att historiken växer. Under
 `MIN_RESOLVED_FOR_WEIGHTING = 10` matcher används enbart lika vikt.
 
+Kryssrutorna **Med i snittet** utesluter en modell ur snittet helt (modellen räknas fortfarande ut och
+visas i sin egen flik). Valet sparas i `modelSettings`, alltså per enhet. Modell 4 tvingas alltid av
+vid start: den räknas bara ut på knapptryck, så dess sannolikheter är noll tills du beräknat den.
+
 ---
 
 ## Modellbeslut som inte är uppenbara
@@ -224,9 +228,14 @@ efter anropsstället kastar `Cannot access before initialization`. Använd `var`
 tidigt (se `syncReady`), eller lägg konstanten inuti funktionen.
 
 **Webbläsarens formuläråterställning.** Vid omladdning återställer webbläsaren reglagens lägen
-*efter* att sidans script kört, vilket skriver över de sparade inställningarna. Alla reglage som
-speglar sparat tillstånd måste ha `autocomplete="off"` **i markupen** — att sätta attributet från JS
-är för sent.
+*efter* att sidans script kört, vilket skriver över de sparade inställningarna. Alla reglage **och
+kryssrutor** som speglar sparat tillstånd måste ha `autocomplete="off"` **i markupen** — att sätta
+attributet från JS är för sent. Kryssrutorna för "Med i snittet" saknade det, och `modelToggles`
+sparades inte alls: efter en omladdning slogs alla modeller på igen medan kryssrutorna kunde stå kvar
+som de lämnats. Gränssnittet visade då "bara Modell 3" medan snittet i själva verket vägde ihop
+Modell 1, 2 och 3 — X i **Snitt & Avancerat** skilde sig från Modell 3:s egen siffra utan synlig
+orsak. Ett tillstånd som styr en beräkning måste både sparas och speglas tillbaka till gränssnittet;
+bara det ena räcker inte.
 
 **Halvfärdiga ändringar.** Projektet har vid två tillfällen innehållit kod som såg komplett ut men
 aldrig var inkopplad: hjälpfunktioner utan anropare, och ett `renderTeamRepairNotice()` som skrev
