@@ -207,6 +207,20 @@ delade de två apparna en gemensam spelbok och skrev över varandras modellparam
 Nycklar: `betsHistory`, `oddsMatchLog`, `predictionsHistory`, `customPctStore`, `savedLeagues`,
 `teamAliases`, `modelSettings`, `syncConfig`, kassa-inställningar.
 
+**Slutresultat per match.** Båda loggarna sparar målsiffror (`score: {h, a, ot}`) utöver utfallet.
+Det som lagras är slutresultatet plus en flagga för förlängning/straffar; regeltidsresultatet härleds
+(4–3 efter förlängning var 3–3 efter 60 minuter), så de två kan aldrig hamna i konflikt. Fylls
+målrutorna i sätts utfallet automatiskt för 1X2 (regeltid) och moneyline (slutresultat), och
+utfallslistan låses så att det bara finns en sanning. Ö/U och handikapp rättas fortsatt för hand:
+utfallet beror på vilken tidsrymd linjen avgörs i, och en kvartslinje kan ge halv vinst/halv förlust
+som listan inte kan uttrycka. Ett resultat som påstås ha avgjorts i förlängning utan att skilja exakt
+ett mål flaggas som ogiltigt i stället för att tyst bli fel historik.
+
+Poängen med att samla in siffrorna: utfallet `'1'`/`'X'`/`'2'` räcker för att mäta om
+1X2-sannolikheterna pekade rätt, men säger nästan ingenting om målfördelningens *form*. Spridning och
+beroende går bara att skatta mot faktiska målsiffror — och historik går inte att rekonstruera i
+efterhand, så insamlingen måste ligga före analysen.
+
 **Molnsynk** mot en JSON-fil i din egen Google Drive via ett Apps Script du deployar själv. Allt går
 via `lsSet()`, vilket gör den till den enda inhakningspunkten för synken — ändras något synkbart
 schemaläggs en fördröjd skickning automatiskt. `modelSettings` och `syncConfig` synkas **inte**: de
@@ -286,7 +300,11 @@ via en riktig webbserver, inte en snapshot-förhandsvisning.
   säsongsaggregat.
 - **Tidsviktning av lagstatistiken.** Oddsloggen har recency-viktning; säsongstabellen har inte det,
   av samma skäl som ovan.
-- **Överspridning från tom-kasse-mål i hockey.** `tieBoost` fångar en del av effekten, men en
-  negativ binomialfördelning vore den riktiga lösningen.
+- **Överspridning från tom-kasse-mål i hockey.** `tieBoost` gör faktiskt inte det här jobbet: vid
+  λ 3.05/2.75 höjer 1.20 oavgjort från 16.9% till 19.7% medan marginalfördelningarnas varians/medelvärde
+  ligger kvar på ~0.99. Det är ett *beroende*-reglage, inte ett spridningsreglage. En negativ
+  binomialfördelning — eller Weibull-räknemodellens formparameter, som klarar spridning åt båda håll
+  (Boshnakov, Kharrat & McHale, *IJF* 33(2), 2017) — vore den riktiga lösningen. Förutsätter loggade
+  målsiffror, som nu samlas in.
 - **Sammanslagning per spel vid synkkonflikt.** Vald strategi är "senaste skrivning vinner" med
   bekräftelse, inte automatisk sammanslagning.

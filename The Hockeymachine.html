@@ -5120,6 +5120,8 @@
 
                 // Generera väljare för Faktiskt Utfall
                 let actualOutcomeSelectorHTML = '';
+                // Rättas utfallet av resultatet låses listan, så de två aldrig kan säga emot varandra.
+                const scoreDrivenOutcome = outcomeFromScoreForBet(bet);
                 if (bet.betType === '1X2') {
                     actualOutcomeSelectorHTML = `
                         <select onchange="updateBetOutcome('${bet.id}', this.value)" class="p-1 border rounded text-[11px] bg-indigo-50 font-bold text-indigo-900 outline-none font-sans">
@@ -5236,7 +5238,7 @@
                         <td class="p-3 text-center font-bold text-slate-600">${bet.stake} €</td>
                         <td class="p-3 text-center">${closingInputHTML}</td>
                         <td class="p-3 text-center ${clvClass}">${clvText}</td>
-                        <td class="p-3 text-center bg-indigo-50/20 border-x border-indigo-50">${actualOutcomeSelectorHTML}</td>
+                        <td class="p-3 text-center bg-indigo-50/20 border-x border-indigo-50">${buildScoreInputHTML('bet', bet.id, bet.score)}${scoreDrivenOutcome ? actualOutcomeSelectorHTML.replace('<select ', '<select disabled title="Utfallet följer av resultatet ovan - töm målrutorna för att rätta för hand." ') : actualOutcomeSelectorHTML}</td>
                         <td class="p-3 text-center">${statusHTML}</td>
                         <td class="p-3 text-center ${netProfitClass}">${netProfitText}</td>
                         <td class="p-3 text-center">
@@ -5249,6 +5251,27 @@
             });
 
             tbody.innerHTML = html;
+        }
+
+        function updateBetScore(id, field, value) {
+            const idx = betsHistory.findIndex(b => b.id === id);
+            if (idx === -1) return;
+            const bet = betsHistory[idx];
+            if (!bet.score) bet.score = { h: '', a: '', ot: false };
+            if (field === 'ot') {
+                bet.score.ot = !!value;
+            } else {
+                const n = parseScorePart(value);
+                bet.score[field] = (n === null ? '' : n);
+            }
+            lsSet('betsHistory', JSON.stringify(betsHistory));
+
+            const derived = outcomeFromScoreForBet(bet);
+            if (derived) {
+                updateBetOutcome(id, derived); // sparar, rättar, renderar och räknar om vikterna
+                return;
+            }
+            renderBetsList();
         }
 
         // Sparar faktiskt matchutfall och auto-rättar spel om möjligt
@@ -5779,6 +5802,91 @@
             alert(`Prediktion loggad: ${newPrediction.match} (1: ${(newPrediction.probs['1']*100).toFixed(1)}% / X: ${(newPrediction.probs['X']*100).toFixed(1)}% / 2: ${(newPrediction.probs['2']*100).toFixed(1)}%)`);
         }
 
+        // --- SLUTRESULTAT PER LOGGAD MATCH ---
+        // Loggarna sparade tidigare bara VILKEN VÄG matchen gick ('1'/'X'/'2'). Det räcker för att mäta
+        // om 1X2-sannolikheterna pekade rätt, men inte för att mäta om MÅLFÖRDELNINGEN är rätt formad:
+        // ett loggat 3-2 säger något som "hemmavinst" inte gör. Utan målsiffror går det inte att skatta
+        // vare sig spridning (är svansarna för tunna?) eller beroendet mellan lagens mål mot egen
+        // historik - man är hänvisad till att gissa reglagelägen. Log loss på 1X2 säger nästan ingenting
+        // om den saken.
+        //
+        // Siffrorna används ännu inte i någon beräkning. Det här är insamlingen: den måste ligga före
+        // analysen, eftersom historik inte går att rekonstruera i efterhand.
+        //
+        // Vi sparar SLUTRESULTATET plus en flagga för om matchen avgjordes i förlängning/straffar.
+        // Regeltidsresultatet följer då entydigt och behöver inte lagras separat: en match som gick
+        // till förlängning stod lika efter 60 minuter, och vinnaren tillgodoräknas exakt ett mål. 4-3
+        // efter förlängning var alltså 3-3 i regeltid. Att spara båda vore dubbellagring som kan hamna
+        // i konflikt med sig själv.
+
+        function parseScorePart(v) {
+            if (v === '' || v === null || v === undefined) return null;
+            const n = Math.round(Number(v));
+            return (isFinite(n) && n >= 0 && n <= 30) ? n : null;
+        }
+
+        function isCompleteScore(score) {
+            return !!score && parseScorePart(score.h) !== null && parseScorePart(score.a) !== null;
+        }
+
+        // Regeltidsresultatet (60 min) härlett ur slutresultatet.
+        function regulationScore(score) {
+            if (!isCompleteScore(score)) return null;
+            const h = parseScorePart(score.h), a = parseScorePart(score.a);
+            if (!score.ot) return { h: h, a: a };
+            const k = Math.min(h, a);
+            return { h: k, a: k };
+        }
+
+        // Ett slutresultat som påstås ha avgjorts i förlängning måste skilja exakt ett mål. Fångar
+        // felskrivningar (3-1 med förlängningsrutan i) innan de blir tyst felaktig historik.
+        function scoreIsInconsistent(score) {
+            if (!isCompleteScore(score)) return false;
+            if (!score.ot) return false;
+            return Math.abs(parseScorePart(score.h) - parseScorePart(score.a)) !== 1;
+        }
+
+        function outcome1X2FromScore(score) {
+            if (scoreIsInconsistent(score)) return '';
+            const reg = regulationScore(score);
+            if (!reg) return '';
+            return reg.h > reg.a ? '1' : (reg.h === reg.a ? 'X' : '2');
+        }
+
+        function outcomeMLFromScore(score) {
+            if (!isCompleteScore(score) || scoreIsInconsistent(score)) return '';
+            const h = parseScorePart(score.h), a = parseScorePart(score.a);
+            if (h === a) return '';
+            return h > a ? 'Home' : 'Away';
+        }
+
+        // Vilka speltyper kan rättas direkt ur resultatet? 1X2 (regeltid) och moneyline (slutresultat)
+        // är entydiga. Ö/U och handikapp är det INTE: utfallet beror dels på vilken tidsrymd linjen
+        // avgörs i, dels kan en kvartslinje ge halv vinst/halv förlust - något utfallslistan inte kan
+        // uttrycka. De rättas därför fortsatt för hand.
+        function outcomeFromScoreForBet(bet) {
+            if (bet.betType === '1X2') return outcome1X2FromScore(bet.score);
+            if (bet.betType === 'ML') return outcomeMLFromScore(bet.score);
+            return null;
+        }
+
+        // Målrutorna som visas i bägge loggarna. Tomma fält = resultatet inte inmatat än.
+        function buildScoreInputHTML(kind, id, score) {
+            const s = score || {};
+            const fn = kind === 'bet' ? 'updateBetScore' : 'updatePredictionScore';
+            const val = v => (v === 0 || v) ? v : '';
+            const box = (field, ph) => `<input type="number" min="0" max="30" step="1" autocomplete="off"
+                    value="${val(s[field])}" placeholder="${ph}" title="${ph === 'H' ? 'Hemmalagets mål' : 'Bortalagets mål'}"
+                    onchange="${fn}('${id}','${field}',this.value)"
+                    class="w-9 p-1 border border-slate-200 rounded text-center text-[11px] focus:ring-1 focus:ring-indigo-400 focus:outline-none">`;
+            const otBox = `<label class="flex items-center gap-1 text-[9px] text-slate-500 cursor-pointer" title="Matchen avgjordes i förlängning eller straffar. Regeltidsresultatet räknas då fram automatiskt.">
+                    <input type="checkbox" autocomplete="off" ${s.ot ? 'checked' : ''} onchange="${fn}('${id}','ot',this.checked)" class="rounded border-slate-300">FL</label>`;
+            const warn = scoreIsInconsistent(score)
+                ? `<div class="text-[9px] text-rose-600 font-semibold mt-0.5" title="Ett slutresultat som avgjorts i förlängning måste skilja exakt ett mål.">Ogiltigt: förlängning kräver 1 måls skillnad</div>`
+                : '';
+            return `<div class="flex items-center justify-center gap-1 mb-1">${box('h','H')}<span class="text-slate-400 text-[10px]">-</span>${box('a','B')}${otBox}</div>${warn}`;
+        }
+
         function renderPredictionsList() {
             const tbody = document.getElementById('predictionsTableBody');
             if (!tbody) return;
@@ -5800,7 +5908,8 @@
                             ${(p.probs['1']*100).toFixed(0)}% / ${(p.probs['X']*100).toFixed(0)}% / ${(p.probs['2']*100).toFixed(0)}%
                         </td>
                         <td class="p-3 text-center bg-indigo-50/30">
-                            <select onchange="updatePredictionOutcome('${p.id}', this.value)" class="p-1.5 border border-slate-300 rounded-md text-xs font-bold">
+                            ${buildScoreInputHTML('prediction', p.id, p.score)}
+                            <select onchange="updatePredictionOutcome('${p.id}', this.value)" ${outcome1X2FromScore(p.score) ? 'disabled title="Utfallet följer av resultatet ovan - töm målrutorna för att sätta det för hand."' : ''} class="p-1.5 border border-slate-300 rounded-md text-xs font-bold disabled:bg-slate-100 disabled:text-slate-500">
                                 <option value="" ${p.actualOutcome === '' ? 'selected' : ''}>- Ej avgjord -</option>
                                 <option value="1" ${p.actualOutcome === '1' ? 'selected' : ''}>1 (Hemma)</option>
                                 <option value="X" ${p.actualOutcome === 'X' ? 'selected' : ''}>X (Oavgjort)</option>
@@ -5814,6 +5923,24 @@
                 `;
             });
             tbody.innerHTML = html;
+        }
+
+        function updatePredictionScore(id, field, value) {
+            const idx = predictionsHistory.findIndex(p => p.id === id);
+            if (idx === -1) return;
+            const p = predictionsHistory[idx];
+            if (!p.score) p.score = { h: '', a: '', ot: false };
+            if (field === 'ot') {
+                p.score.ot = !!value;
+            } else {
+                const n = parseScorePart(value);
+                p.score[field] = (n === null ? '' : n);
+            }
+            const derived = outcome1X2FromScore(p.score);
+            if (derived) p.actualOutcome = derived;
+            lsSet('predictionsHistory', JSON.stringify(predictionsHistory));
+            renderPredictionsList();
+            computePredictionsEval();
         }
 
         function updatePredictionOutcome(id, val) {
