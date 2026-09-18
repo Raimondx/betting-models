@@ -19,12 +19,54 @@ ordagrant likadant.
 ## Kom igång
 
 1. Öppna HTML-filen i en webbläsare.
-2. Ladda upp en lag-CSV (Understat, FootyStats eller liknande) via **Ladda upp lag-CSV**.
-   Kolumnerna detekteras automatiskt; går det fel finns manuell kolumnkoppling.
+2. Få in lagdata, antingen genom att ladda upp en lag-CSV (Understat, FootyStats eller liknande) via
+   **Ladda upp lag-CSV**, eller genom att markera tabellen på sajten och klistra in den i **Klistra in
+   tabell från webben**. Kolumnerna detekteras automatiskt; går det fel finns manuell kolumnkoppling.
 3. Välj hemma- och bortalag, gå till **Snitt & Avancerat** och bokför spel.
 
 Vill du köra apparna från flera enheter behöver de ligga på en https-adress
 (GitHub Pages, Cloudflare Pages, Netlify). Se avsnittet om molnsynk.
+
+### Klistra in tabell från webben
+
+Vägen via ett kalkylblad är den vanligaste källan till trasig data: ett svenskt eller finskt Google
+Sheets läser `3.32` som klockslaget 3:32 och `+1.47` som en formel, så siffrorna är förstörda innan
+appen ser dem. Klistrar man in tabellen direkt i appen passerar texten aldrig ett kalkylblad.
+
+Rutan tar emot det man faktiskt får när man kopierar en webbtabell: kolumner avgränsade med tabbar
+eller med flera mellanslag i rad, med eller utan rubrikrad, med punkt eller komma som decimaltecken,
+och med hårda mellanslag och tomrader kvar. Enkla mellanslag går däremot inte att tolka — lagnamn
+innehåller dem (`K-Espoo`, `Brighton & Hove Albion`), så en sådan tabell går till manuell koppling.
+
+**FootyStats.org** (fotboll) har rubriker som känns igen automatiskt och importeras direkt.
+**liigaxg.online** (hockey) levererar tabellen *utan* rubrikrad, så den känns igen på formen i stället:
+nio kolumner där den första är ett tal, den andra text och den tredje ett rimligt matchantal. Då fylls
+kopplingen i efter sajtens kolumnordning (`placering · lag · matcher · xGF · xGA · xG-diff · GF · GA ·
+måldiff`) och "snitt per match" förkryssas, eftersom siffrorna är per match och inte säsongstotaler.
+Kopplingen importeras aldrig rakt av — panelen öppnas ifylld så att du ser vad appen tror innan något
+läses in.
+
+Att kolumn 7/8 är riktiga mål och 4/5 är xG kontrolleras mot datan i stället för att antas: mål per
+match gånger antal matcher måste landa på ett heltal, vilket xG inte gör. Testet avgör dock inte om
+layouten godtas — med ett par inklistrade rader är utfallet brus — utan varnar bara när det över
+tillräckligt många rader tydligt säger emot kolumnordningen.
+
+I rutan finns också ett **namnfält** och en kryssruta för **snitt per match**. Namnet sparar ligan i
+webbläsaren och följer med på bokförda spel, så spelboken går att filtrera per liga i efterhand; utan
+namn bokförs spelen som "Uppladdad CSV-fil".
+
+### Snitt per match kontra totaler
+
+Appen räknar på säsongstotaler. FootyStats visar beroende på vy `1.62 mål per match` i stället för
+`49 mål på säsongen`, och läses det som en totalsumma blir varje lag ungefär trettio gånger för svagt.
+Ingenting ser trasigt ut i gränssnittet — modellen räknar bara på fel baslinje.
+
+Därför kontrolleras kvoten `gf/mp` efter varje import, oavsett om datan kom från en fil eller
+inklistringsrutan och oavsett hur kryssrutan stod. Hamnar den utanför det rimliga (fotboll ca 1.0–1.8
+mål per lag och match, hockey ca 2.5–3.5) stoppas importen: kopplingspanelen öppnas med kryssrutan
+rättad och en förklaring av vad som såg fel ut. Kontrollen går åt båda hållen — totaler som råkat
+kryssas som snitt fångas likaväl — och frågar bara en gång per import, så ett medvetet udda dataset
+går att importera ändå.
 
 ---
 
@@ -59,6 +101,10 @@ bara matcher du valde att spela på, alltså just de där modellerna avvek mest 
 Vikterna krymps mot lika vikt med `WEIGHT_PRIOR_STRENGTH = 40` pseudomatcher, så de glider mjukt
 från 1/n mot uppmätt träffsäkerhet i takt med att historiken växer. Under
 `MIN_RESOLVED_FOR_WEIGHTING = 10` matcher används enbart lika vikt.
+
+Kryssrutorna **Med i snittet** utesluter en modell ur snittet helt (modellen räknas fortfarande ut och
+visas i sin egen flik). Valet sparas i `modelSettings`, alltså per enhet. Modell 4 tvingas alltid av
+vid start: den räknas bara ut på knapptryck, så dess sannolikheter är noll tills du beräknat den.
 
 ---
 
@@ -122,7 +168,19 @@ resultat k–k flyttas till (k+1)–k eller k–(k+1) beroende på vem som vinne
 
 - **1X2** läses ur 60-minutersmatrisen — det är "60 minuter"-marknaden.
 - **Moneyline** läses ur slutresultatmatrisen.
-- **Ö/U och puckline** styrs av inställningen `ouAhIncludeOT` (standard: inklusive förlängning).
+- **Ö/U** styrs av `ouIncludeOT` (standard: inklusive förlängning, som hos bookmakers).
+- **Handikapp/puckline** styrs av `ahIncludeOT` (standard: 60 minuter).
+
+De två marknaderna har **varsin** inställning, inte en gemensam. Tidsrymden betyder mycket mer för
+handikappet än för totalen: inklusive förlängning slutar varje match som stod lika på exakt ±1 mål, så
+pushen på 0 (DNB) försvinner helt och massa flyttas till ±1-linjerna, medan totalen bara skiftar med
+P(oavgjort) mål. Vid λ 2.9/2.7 blir DNB 69.1% med 16.1% push efter 60 minuter, men 67.2% helt utan
+push inklusive förlängning. En sparad `ouAhIncludeOT` från den gemensamma tiden migreras till
+`ouIncludeOT`, så totalen beter sig som förut.
+
+Procenten i tabellerna är det **rättvisa** (break-even) värdet `W/(W+L)`, inte den råa
+vinstsannolikheten — push är utbruten och står i linjekolumnen. På puckline ±1.5 finns ingen push och
+de sammanfaller; på 0 och ±1 gör de det inte.
 
 Invarianter värda att känna till vid ändringar: massan bevaras exakt, slutresultatmatrisens diagonal
 är noll, `moneyline = h + d × P(hemmavinst i förlängning)`, och förväntade totalmål ökar med **exakt**
@@ -191,6 +249,20 @@ delade de två apparna en gemensam spelbok och skrev över varandras modellparam
 Nycklar: `betsHistory`, `oddsMatchLog`, `predictionsHistory`, `customPctStore`, `savedLeagues`,
 `teamAliases`, `modelSettings`, `syncConfig`, kassa-inställningar.
 
+**Slutresultat per match.** Båda loggarna sparar målsiffror (`score: {h, a, ot}`) utöver utfallet.
+Det som lagras är slutresultatet plus en flagga för förlängning/straffar; regeltidsresultatet härleds
+(4–3 efter förlängning var 3–3 efter 60 minuter), så de två kan aldrig hamna i konflikt. Fylls
+målrutorna i sätts utfallet automatiskt för 1X2 (regeltid) och moneyline (slutresultat), och
+utfallslistan låses så att det bara finns en sanning. Ö/U och handikapp rättas fortsatt för hand:
+utfallet beror på vilken tidsrymd linjen avgörs i, och en kvartslinje kan ge halv vinst/halv förlust
+som listan inte kan uttrycka. Ett resultat som påstås ha avgjorts i förlängning utan att skilja exakt
+ett mål flaggas som ogiltigt i stället för att tyst bli fel historik.
+
+Poängen med att samla in siffrorna: utfallet `'1'`/`'X'`/`'2'` räcker för att mäta om
+1X2-sannolikheterna pekade rätt, men säger nästan ingenting om målfördelningens *form*. Spridning och
+beroende går bara att skatta mot faktiska målsiffror — och historik går inte att rekonstruera i
+efterhand, så insamlingen måste ligga före analysen.
+
 **Molnsynk** mot en JSON-fil i din egen Google Drive via ett Apps Script du deployar själv. Allt går
 via `lsSet()`, vilket gör den till den enda inhakningspunkten för synken — ändras något synkbart
 schemaläggs en fördröjd skickning automatiskt. `modelSettings` och `syncConfig` synkas **inte**: de
@@ -224,9 +296,14 @@ efter anropsstället kastar `Cannot access before initialization`. Använd `var`
 tidigt (se `syncReady`), eller lägg konstanten inuti funktionen.
 
 **Webbläsarens formuläråterställning.** Vid omladdning återställer webbläsaren reglagens lägen
-*efter* att sidans script kört, vilket skriver över de sparade inställningarna. Alla reglage som
-speglar sparat tillstånd måste ha `autocomplete="off"` **i markupen** — att sätta attributet från JS
-är för sent.
+*efter* att sidans script kört, vilket skriver över de sparade inställningarna. Alla reglage **och
+kryssrutor** som speglar sparat tillstånd måste ha `autocomplete="off"` **i markupen** — att sätta
+attributet från JS är för sent. Kryssrutorna för "Med i snittet" saknade det, och `modelToggles`
+sparades inte alls: efter en omladdning slogs alla modeller på igen medan kryssrutorna kunde stå kvar
+som de lämnats. Gränssnittet visade då "bara Modell 3" medan snittet i själva verket vägde ihop
+Modell 1, 2 och 3 — X i **Snitt & Avancerat** skilde sig från Modell 3:s egen siffra utan synlig
+orsak. Ett tillstånd som styr en beräkning måste både sparas och speglas tillbaka till gränssnittet;
+bara det ena räcker inte.
 
 **Halvfärdiga ändringar.** Projektet har vid två tillfällen innehållit kod som såg komplett ut men
 aldrig var inkopplad: hjälpfunktioner utan anropare, och ett `renderTeamRepairNotice()` som skrev
@@ -265,7 +342,11 @@ via en riktig webbserver, inte en snapshot-förhandsvisning.
   säsongsaggregat.
 - **Tidsviktning av lagstatistiken.** Oddsloggen har recency-viktning; säsongstabellen har inte det,
   av samma skäl som ovan.
-- **Överspridning från tom-kasse-mål i hockey.** `tieBoost` fångar en del av effekten, men en
-  negativ binomialfördelning vore den riktiga lösningen.
+- **Överspridning från tom-kasse-mål i hockey.** `tieBoost` gör faktiskt inte det här jobbet: vid
+  λ 3.05/2.75 höjer 1.20 oavgjort från 16.9% till 19.7% medan marginalfördelningarnas varians/medelvärde
+  ligger kvar på ~0.99. Det är ett *beroende*-reglage, inte ett spridningsreglage. En negativ
+  binomialfördelning — eller Weibull-räknemodellens formparameter, som klarar spridning åt båda håll
+  (Boshnakov, Kharrat & McHale, *IJF* 33(2), 2017) — vore den riktiga lösningen. Förutsätter loggade
+  målsiffror, som nu samlas in.
 - **Sammanslagning per spel vid synkkonflikt.** Vald strategi är "senaste skrivning vinner" med
   bekräftelse, inte automatisk sammanslagning.
