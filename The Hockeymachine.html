@@ -167,6 +167,35 @@
             <div id="debugLog" class="max-h-40 overflow-y-auto"></div>
         </div>
 
+
+        <!-- KLISTRA IN TABELL DIREKT FRÅN WEBBEN -->
+        <!-- Vägen via kalkylblad är den vanligaste källan till trasig data: ett svenskt/finskt Google
+             Sheets läser "3.32" som klockslaget 3:32 och "+1.47" som en formel, och då är siffrorna
+             förstörda innan appen ens ser dem. Klistrar man in tabellen direkt hit passerar texten
+             aldrig ett kalkylblad. -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-5 space-y-3 shadow-sm">
+            <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2">
+                <i class="fa-solid fa-clipboard text-indigo-500"></i> Klistra in tabell från webben
+            </h3>
+            <p class="text-xs text-slate-500">
+                Hämtar du hockeydata från <strong>liigaxg.online</strong> känner appen igen tabellen automatiskt.
+                Markera tabellen på sajten, kopiera och klistra in här - ingen fil, inget kalkylblad.
+                Har tabellen en rubrikrad tas den med; saknas den gissar appen och låter dig bekräfta.
+            </p>
+            <textarea id="pasteTableInput" rows="6" autocomplete="off" spellcheck="false"
+                      placeholder="Tappara&#9;3&#9;3.18&#9;2.33&#9;..."
+                      class="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-mono outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+            <div class="flex flex-wrap gap-2 items-center">
+                <button onclick="handlePastedTable()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs transition-colors">
+                    <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Tolka inklistrad tabell
+                </button>
+                <button onclick="clearPastedTable()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg font-bold text-xs transition-colors">
+                    Rensa
+                </button>
+                <span id="pasteTableStatus" class="text-[11px] text-slate-500"></span>
+            </div>
+        </div>
+
         <!-- MANUELL KOLUMN-KOPPLING (fallback när automatisk detektering misslyckas eller är osäker) -->
         <div id="manualMappingPanel" class="hidden bg-white border border-amber-300 rounded-2xl p-5 space-y-3 shadow-sm">
             <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2">
@@ -178,6 +207,7 @@
                 från första raden så du kan känna igen rätt kolumn även om rubriken saknas. De tre sista är
                 valfria - lämna dem som "Ingen" om din fil saknar xG-data, så räknar appen istället på rena mål.
             </p>
+            <p id="presetNotice" class="hidden"></p>
             <p id="noHeaderNotice" class="hidden text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
                 <i class="fa-solid fa-triangle-exclamation mr-1"></i> Filen verkar sakna en rubrikrad (troligen inklistrad från en webbsida istället för nedladdad som CSV). Appen räknar första raden som data och visar exempelvärden nedan istället för kolumnnamn.
             </p>
@@ -6167,6 +6197,154 @@
         // --- OPTIMERAD OCH SKIPTSLÄGESOBEROENDE CSV FIL-TOLKARE (KORRIGERAD FÖR CITATTECKEN & Excel BOM) ---
         let pendingCsvImport = null; // Rådata (rader/kolumnrubriker) från senast tolkade fil, så manuell kolumn-koppling kan återanvända den utan att läsa filen igen.
 
+
+
+        // --- KÄND LAYOUT: liigaxg.online ---
+        // Den tabellen kommer UTAN rubrikrad, så namnbaserad detektering har inget att gå på. Kolumnerna
+        // ligger i stället alltid så här:
+        //   0 placering | 1 lag | 2 matcher | 3 xGF | 4 xGA | 5 xG-diff | 6 GF | 7 GA | 8 måldiff
+        // Siffrorna är per match, inte säsongstotaler.
+        //
+        // Att 6/7 är FAKTISKA mål och 3/4 är xG antas inte - det kontrolleras mot datan: mål per match
+        // gånger antal matcher måste landa på (nära) ett heltal, eftersom man inte kan göra ett halvt mål.
+        // xG gör det inte. Stämmer inte det lämnas gissningen, och kopplingen får göras för hand.
+        //
+        // Gissningen importeras aldrig rakt av: kopplingspanelen öppnas med fälten ifyllda så att du ser
+        // vad appen tror innan något läses in.
+        function guessLiigaXgColumns(rows) {
+            if (!rows || rows.length === 0) return null;
+            if (!rows.every(r => r.length === 9)) return null;
+
+            const num = v => {
+                const n = parseFloat(String(v === undefined || v === null ? '' : v).replace(',', '.'));
+                return isFinite(n) ? n : null;
+            };
+
+            for (let i = 0; i < rows.length; i++) {
+                const r = rows[i];
+                if (num(r[0]) === null) return null;             // placering är ett tal
+                if (!r[1] || num(r[1]) !== null) return null;     // lagnamnet är text
+                const mp = num(r[2]);
+                if (mp === null || mp <= 0 || mp > 120 || Math.abs(mp - Math.round(mp)) > 1e-9) return null;
+                for (const c of [3, 4, 6, 7]) if (num(r[c]) === null) return null;
+            }
+
+            // Vilket kolumnpar beter sig som RIKTIGA mål? Mål per match gånger antal matcher måste landa
+            // på ett heltal - man gör inte ett halvt mål - medan xG inte gör det. Det avgör dock inte om
+            // layouten godtas: med ett par inklistrade rader är utfallet brus, och sajtens egen avrundning
+            // gör att inte ens rätt kolumn träffar varje gång. Kolumnordningen kommer från liigaxg;
+            // testet får bara flagga när det tydligt säger emot, och då över tillräckligt många rader.
+            const integerScore = pair => {
+                let hit = 0, n = 0;
+                rows.forEach(r => {
+                    const mp = num(r[2]);
+                    pair.forEach(c => {
+                        const v = num(r[c]);
+                        if (v === null) return;
+                        n++;
+                        if (Math.abs(v * mp - Math.round(v * mp)) < 0.05) hit++;
+                    });
+                });
+                return n ? hit / n : 0;
+            };
+
+            return {
+                squad: { index: 1 }, mp: { index: 2 },
+                gf: { index: 6 }, ga: { index: 7 },
+                xg: { index: 3 }, xga: { index: 4 },
+                xpts: { index: -1 },
+                perGameRates: true,
+                sourceName: 'liigaxg.online',
+                maybeSwapped: rows.length >= 6 && integerScore([3, 4]) > integerScore([6, 7]) + 0.2
+            };
+        }
+
+
+        // Utan igenkänd rubrik föll alla fält tillbaka på kolumn 0 i kopplingspanelen - alltså oftast
+        // placeringssiffran, vilket gör att ett tryck på Importera ger lag som heter "1", "2", "3".
+        // Lagnamnskolumnen går att gissa säkert nog: den är den första där värdena INTE är tal.
+        function guessSquadColumn(rows) {
+            if (!rows || rows.length === 0) return -1;
+            const width = Math.max.apply(null, rows.map(r => r.length));
+            for (let c = 0; c < width; c++) {
+                let text = 0, filled = 0;
+                rows.forEach(r => {
+                    const v = (r[c] === undefined || r[c] === null) ? '' : String(r[c]).trim();
+                    if (!v) return;
+                    filled++;
+                    if (!isFinite(parseFloat(v.replace(',', '.')))) text++;
+                });
+                if (filled > 0 && text / filled >= 0.7) return c;
+            }
+            return -1;
+        }
+
+        // --- INKLISTRAD TABELL ---
+        // Samma tolkningskedja som filuppladdningen (ingestTabularText), bara en annan väg in. Det som
+        // skiljer är att en webbtabell inte kommer som CSV: kolumnerna separeras av tabbar, eller - om
+        // sajten renderar dem så - av flera mellanslag i rad. Enkla mellanslag går inte att lita på,
+        // eftersom lagnamn innehåller dem ("K-Espoo", "Brighton & Hove Albion").
+        function normalizePastedTable(raw) {
+            const lines = String(raw || '')
+                .replace(/\u00A0/g, ' ')               // hårda mellanslag -> vanliga
+                .split(/\r\n|\r|\n/)
+                .map(l => l.replace(/\s+$/, ''))
+                .filter(l => l.trim().length > 0);
+            if (lines.length === 0) return null;
+
+            const hasTabs = lines.some(l => l.indexOf('\t') !== -1);
+            if (hasTabs) return { text: lines.join('\n'), delimiter: '\t', how: 'tabbar' };
+
+            // Flera mellanslag i rad som kolumnbrytning - vanligt när tabellen renderats som text.
+            if (lines.some(l => /\S {2,}\S/.test(l))) {
+                return { text: lines.map(l => l.trim().replace(/ {2,}/g, '\t')).join('\n'),
+                         delimiter: '\t', how: 'flera mellanslag' };
+            }
+            if (lines.some(l => l.indexOf(';') !== -1)) return { text: lines.join('\n'), delimiter: ';', how: 'semikolon' };
+            if (lines.some(l => l.indexOf(',') !== -1)) return { text: lines.join('\n'), delimiter: ',', how: 'kommatecken' };
+            return null;
+        }
+
+        function clearPastedTable() {
+            setVal('pasteTableInput', '');
+            setTxt('pasteTableStatus', '');
+            hideManualColumnMapping();
+        }
+
+        function handlePastedTable() {
+            const raw = getValStr('pasteTableInput', '');
+            const status = document.getElementById('pasteTableStatus');
+            const setStatus = (msg, bad) => {
+                if (!status) return;
+                status.textContent = msg;
+                status.className = bad ? 'text-[11px] text-rose-600 font-semibold' : 'text-[11px] text-emerald-600 font-semibold';
+            };
+
+            if (!raw.trim()) { setStatus('Klistra in tabellen i rutan först.', true); return; }
+
+            const norm = normalizePastedTable(raw);
+            if (!norm) {
+                setStatus('Kunde inte hitta några kolumner - kolumnerna måste skiljas åt av tabbar, flera mellanslag, semikolon eller kommatecken.', true);
+                return;
+            }
+
+            const debugLog = document.getElementById('debugLog');
+            if (debugLog) debugLog.innerHTML = '';
+            const debugConsole = document.getElementById('debugConsole');
+            if (debugConsole) debugConsole.classList.remove('hidden');
+            logDebug(`Tolkar inklistrad tabell (kolumner avgränsade med ${norm.how}).`);
+
+            setStatus('Tolkar...', false);
+            const ok = ingestTabularText(norm.text, 'inklistrad tabell', norm.delimiter);
+            if (ok) {
+                setStatus(`Klart - ${ok} rader lästes in. Kontrollera lagen i listan nedan.`, false);
+            } else if (lastIngestPresetName) {
+                setStatus(`Tabellen känns igen som ${lastIngestPresetName} - kontrollera den ifyllda kopplingen nedanför och tryck "Importera med denna koppling".`, false);
+            } else {
+                setStatus('Kolumnerna kunde inte kopplas automatiskt - koppla dem i panelen nedanför.', true);
+            }
+        }
+
         function handleCsvUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -6185,16 +6363,38 @@
                     const decoded = decodeUploadedBytes(e.target.result);
                     let text = decoded.text.replace(/^\uFEFF/, "");
                     logDebug(`Filen l\u00E4stes som ${decoded.encoding}.`);
+                    ingestTabularText(text, file.name);
+                } catch (err) {
+                    logDebug(`Exception vid tolkning: ${err.message}`, true);
+                    alert("Ett fel uppstod vid inläsningen av CSV-filen. Kontrollera filens format.");
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
 
+        // Tolkar en tabell som text - samma väg oavsett om den kom från en uppladdad fil eller från
+        // inklistringsrutan. Returnerar antalet inlästa rader vid lyckad automatisk koppling, annars 0
+        // (då har kopplingspanelen öppnats i stället).
+        // forcedDelimiter sätts av inklistringen: en webbtabell normaliseras alltid till tabbar, och
+        // utan det skulle ett kommatecken i ett lagnamn kunna kapa separatordetekteringen.
+        let lastIngestPresetName = null;   // satt när en känd layout känts igen och väntar på bekräftelse
+
+        function ingestTabularText(text, sourceLabel, forcedDelimiter) {
+            lastIngestPresetName = null;
+            try {
+                {
+                    const file = { name: sourceLabel };
                     const lines = text.split(/\r\n|\r|\n/).filter(line => line.trim().length > 0);
                     if (lines.length < 2) {
-                        logDebug("Fel: CSV-filen måste innehålla minst en rubrikrad och en datarad.", true);
-                        return;
+                        logDebug("Fel: tabellen måste innehålla minst en rubrikrad och en datarad.", true);
+                        return 0;
                     }
 
                     // Detektera separator (semikolon, kommatecken eller tabulator)
-                    let delimiter = ';';
-                    if (lines[0].includes(';')) {
+                    let delimiter = forcedDelimiter || ';';
+                    if (forcedDelimiter) {
+                        /* redan avgjort av anroparen */
+                    } else if (lines[0].includes(';')) {
                         delimiter = ';';
                     } else if (lines[0].includes(',')) {
                         delimiter = ',';
@@ -6214,7 +6414,7 @@
                     // första raden (och ibland fler) helt tom. Hoppa förbi alla helt tomma rader i början
                     // och hitta första raden som faktiskt innehåller något - det är den vi visar som exempel
                     // och (om ingen rubrik hittades) börjar tolka data ifrån.
-                    const noHeaderRow = headers.every(h => h.trim() === '');
+                    let noHeaderRow = headers.every(h => h.trim() === '');
                     let dataStartIndex = noHeaderRow ? 0 : 1;
                     if (noHeaderRow) {
                         while (dataStartIndex < lines.length) {
@@ -6224,12 +6424,12 @@
                         }
                         logDebug(`⚠️ Ingen rubrikrad hittades (alla celler på första raden är tomma) - troligen inklistrad från en webbsida. Hoppar till rad ${dataStartIndex + 1} där data faktiskt börjar.`, true);
                     }
-                    const previewRow = lines[dataStartIndex] ? lines[dataStartIndex].split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, '').replace(/"/g, '').replace(/'/g, '')) : [];
+                    let previewRow = lines[dataStartIndex] ? lines[dataStartIndex].split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, '').replace(/"/g, '').replace(/'/g, '')) : [];
 
                     // Kolumnkartläggning - känner igen både Understat-stil (GF/GA/xG) och t.ex. FootyStats-stil
                     // (seasonGoals_overall, seasonConceded_overall, osv). Ger inga träffar alls om rubrikraden
                     // var tom, vilket korrekt skickar filen till den manuella kopplingspanelen nedan.
-                    const cols = autoDetectColumns(headers, 'overall');
+                    let cols = autoDetectColumns(headers, 'overall');
 
                     logDebug(`Kolumner (auto): Lag: ${cols.squad.index}, Matcher: ${cols.mp.index}, GF: ${cols.gf.index}, GA: ${cols.ga.index}, xG: ${cols.xg.index}, xGA: ${cols.xga.index}, xPts: ${cols.xpts.index}`);
 
@@ -6243,12 +6443,47 @@
                     const requiredMissing = [cols.squad, cols.mp, cols.gf, cols.ga].some(c => c.index === -1);
 
                     if (requiredMissing || noHeaderRow) {
+                        // Pröva de layouter vi känner igen på FORMEN, inte på rubriknamn. Testet körs
+                        // på alla rader inklusive den första: matchar den också mönstret fanns det aldrig
+                        // någon rubrikrad, och raden är ett lag som annars hade tappats bort.
+                        const split = l => l.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, '').replace(/"/g, '').replace(/'/g, ''));
+                        let preset = guessLiigaXgColumns(lines.map(split));
+                        if (preset) {
+                            noHeaderRow = true;
+                            dataStartIndex = 0;
+                            previewRow = split(lines[0]);
+                        } else if (noHeaderRow) {
+                            preset = guessLiigaXgColumns(lines.slice(dataStartIndex).map(split));
+                        }
+                        if (preset) {
+                            cols = preset;
+                            // Utan riktiga rubriker är kolumnnumret det enda begripliga namnet i listan.
+                            const labels = previewRow.map((_, i) => `Kolumn ${i}`);
+                            pendingCsvImport.cols = cols;
+                            pendingCsvImport.headers = labels;
+                            pendingCsvImport.noHeaderRow = noHeaderRow;
+                            pendingCsvImport.dataStartIndex = dataStartIndex;
+                            pendingCsvImport.previewRow = previewRow;
+                            lastIngestPresetName = preset.sourceName;
+                            logDebug(`Tabellen matchar layouten från ${preset.sourceName} - kopplingen är förifylld. Kontrollera och tryck "Importera med denna koppling".`, true);
+                            showManualColumnMapping(labels, cols, previewRow, noHeaderRow, preset);
+                            return 0;
+                        }
+                        if (cols.squad.index === -1) {
+                            const guessedSquad = guessSquadColumn(lines.slice(dataStartIndex)
+                                .map(l => l.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, ''))));
+                            if (guessedSquad !== -1) {
+                                cols.squad = { index: guessedSquad, ambiguous: false, candidates: [guessedSquad] };
+                                pendingCsvImport.cols = cols;
+                                logDebug(`Lagnamnskolumnen gissad till kolumn ${guessedSquad} (den första som inte innehåller tal).`);
+                            }
+                        }
                         if (requiredMissing) logDebug("Kritiskt fel: Lagnamn, Matcher, GF eller GA kunde inte identifieras automatiskt.", true);
                         alert(noHeaderRow
                             ? "Filen saknar en rubrikrad, så kolumnerna måste kopplas manuellt. Panelen nedanför uppladdningsknappen visar ett exempelvärde från första raden bredvid varje kolumn för att göra det enklare."
                             : "Kunde inte identifiera alla nödvändiga kolumner automatiskt (vanligt med data från andra sajter än Understat). Koppla dem manuellt i panelen som visas nedanför uppladdningsknappen.");
                         showManualColumnMapping(headers, cols, previewRow, noHeaderRow);
-                        return;
+                        return 0;
                     }
 
                     if (cols.xg.index === -1 || cols.xga.index === -1) {
@@ -6259,12 +6494,13 @@
                     }
 
                     finalizeMainCsvImport(cols, file.name, false);
-                } catch (err) {
-                    logDebug(`Exception vid tolkning: ${err.message}`, true);
-                    alert("Ett fel uppstod vid inläsningen av CSV-filen. Kontrollera filens format.");
+                    return Math.max(0, lines.length - dataStartIndex);
                 }
-            };
-            reader.readAsArrayBuffer(file);
+            } catch (err) {
+                logDebug(`Exception vid tolkning: ${err.message}`, true);
+                alert("Ett fel uppstod vid inläsningen av tabellen. Kontrollera formatet.");
+            }
+            return 0;
         }
 
         // Slutför importen utifrån en given kolumn-koppling (antingen auto-detekterad eller manuellt vald).
@@ -6404,7 +6640,7 @@
         // Fallback (och alltid tillgänglig genväg) för när automatisk kolumndetektering misslyckas eller
         // gissar fel - t.ex. med data från sajter vars kolumnnamn skiljer sig från både Understat och de
         // FootyStats-mönster vi känner igen. Låter användaren peka ut rätt kolumn för varje fält för hand.
-        function showManualColumnMapping(headers, cols, previewRow, noHeaderRow) {
+        function showManualColumnMapping(headers, cols, previewRow, noHeaderRow, preset) {
             const panel = document.getElementById('manualMappingPanel');
             if (!panel) return;
 
@@ -6430,6 +6666,23 @@
 
             const notice = document.getElementById('noHeaderNotice');
             if (notice) notice.classList.toggle('hidden', !noHeaderRow);
+
+            // En igenkänd layout förkryssar "snitt per match" åt dig - men lämnar rutan redigerbar.
+            const rateBox = document.getElementById('mapIsPerGameRate');
+            if (rateBox && preset) rateBox.checked = !!preset.perGameRates;
+            const presetNotice = document.getElementById('presetNotice');
+            if (presetNotice) {
+                if (preset) {
+                    const swapWarning = preset.maybeSwapped
+                        ? ` <strong class="text-rose-700">Obs:</strong> xG-kolumnerna ser mer ut som riktiga mål än målkolumnerna gör. Kontrollera extra noga att xG och GF/GA inte ligger omvänt i den här tabellen.`
+                        : '';
+                    presetNotice.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Tabellen ser ut att komma från <strong>${preset.sourceName}</strong>. Kopplingen nedan är ifylld efter den kända kolumnordningen och "snitt per match" är förkryssad. Kontrollera exempelvärdena innan du importerar.${swapWarning}`;
+                    presetNotice.className = "text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg p-2";
+                } else {
+                    presetNotice.innerHTML = '';
+                    presetNotice.className = "hidden";
+                }
+            }
 
             panel.classList.remove('hidden');
             if (typeof panel.scrollIntoView === 'function') {

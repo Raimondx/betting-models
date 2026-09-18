@@ -167,6 +167,35 @@
             <div id="debugLog" class="max-h-40 overflow-y-auto"></div>
         </div>
 
+
+        <!-- KLISTRA IN TABELL DIREKT FRÅN WEBBEN -->
+        <!-- Vägen via kalkylblad är den vanligaste källan till trasig data: ett svenskt/finskt Google
+             Sheets läser "3.32" som klockslaget 3:32 och "+1.47" som en formel, och då är siffrorna
+             förstörda innan appen ens ser dem. Klistrar man in tabellen direkt hit passerar texten
+             aldrig ett kalkylblad. -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-5 space-y-3 shadow-sm">
+            <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2">
+                <i class="fa-solid fa-clipboard text-indigo-500"></i> Klistra in tabell från webben
+            </h3>
+            <p class="text-xs text-slate-500">
+                Hämtar du fotbollsdata från <strong>FootyStats.org</strong> känner appen igen kolumnrubrikerna automatiskt.
+                Markera tabellen på sajten, kopiera och klistra in här - ingen fil, inget kalkylblad.
+                Har tabellen en rubrikrad tas den med; saknas den gissar appen och låter dig bekräfta.
+            </p>
+            <textarea id="pasteTableInput" rows="6" autocomplete="off" spellcheck="false"
+                      placeholder="Team&#9;MP&#9;GF&#9;GA&#9;xG&#9;xGA&#9;xPTS"
+                      class="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-mono outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+            <div class="flex flex-wrap gap-2 items-center">
+                <button onclick="handlePastedTable()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs transition-colors">
+                    <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Tolka inklistrad tabell
+                </button>
+                <button onclick="clearPastedTable()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg font-bold text-xs transition-colors">
+                    Rensa
+                </button>
+                <span id="pasteTableStatus" class="text-[11px] text-slate-500"></span>
+            </div>
+        </div>
+
         <!-- MANUELL KOLUMN-KOPPLING (fallback när automatisk detektering misslyckas eller är osäker) -->
         <div id="manualMappingPanel" class="hidden bg-white border border-amber-300 rounded-2xl p-5 space-y-3 shadow-sm">
             <h3 class="font-bold text-sm text-slate-800 flex items-center gap-2">
@@ -5657,6 +5686,93 @@
         // --- OPTIMERAD OCH SKIPTSLÄGESOBEROENDE CSV FIL-TOLKARE (KORRIGERAD FÖR CITATTECKEN & Excel BOM) ---
         let pendingCsvImport = null; // Rådata (rader/kolumnrubriker) från senast tolkade fil, så manuell kolumn-koppling kan återanvända den utan att läsa filen igen.
 
+
+
+        // Utan igenkänd rubrik föll alla fält tillbaka på kolumn 0 i kopplingspanelen - alltså oftast
+        // placeringssiffran, vilket gör att ett tryck på Importera ger lag som heter "1", "2", "3".
+        // Lagnamnskolumnen går att gissa säkert nog: den är den första där värdena INTE är tal.
+        function guessSquadColumn(rows) {
+            if (!rows || rows.length === 0) return -1;
+            const width = Math.max.apply(null, rows.map(r => r.length));
+            for (let c = 0; c < width; c++) {
+                let text = 0, filled = 0;
+                rows.forEach(r => {
+                    const v = (r[c] === undefined || r[c] === null) ? '' : String(r[c]).trim();
+                    if (!v) return;
+                    filled++;
+                    if (!isFinite(parseFloat(v.replace(',', '.')))) text++;
+                });
+                if (filled > 0 && text / filled >= 0.7) return c;
+            }
+            return -1;
+        }
+
+        // --- INKLISTRAD TABELL ---
+        // Samma tolkningskedja som filuppladdningen (ingestTabularText), bara en annan väg in. Det som
+        // skiljer är att en webbtabell inte kommer som CSV: kolumnerna separeras av tabbar, eller - om
+        // sajten renderar dem så - av flera mellanslag i rad. Enkla mellanslag går inte att lita på,
+        // eftersom lagnamn innehåller dem ("K-Espoo", "Brighton & Hove Albion").
+        function normalizePastedTable(raw) {
+            const lines = String(raw || '')
+                .replace(/\u00A0/g, ' ')               // hårda mellanslag -> vanliga
+                .split(/\r\n|\r|\n/)
+                .map(l => l.replace(/\s+$/, ''))
+                .filter(l => l.trim().length > 0);
+            if (lines.length === 0) return null;
+
+            const hasTabs = lines.some(l => l.indexOf('\t') !== -1);
+            if (hasTabs) return { text: lines.join('\n'), delimiter: '\t', how: 'tabbar' };
+
+            // Flera mellanslag i rad som kolumnbrytning - vanligt när tabellen renderats som text.
+            if (lines.some(l => /\S {2,}\S/.test(l))) {
+                return { text: lines.map(l => l.trim().replace(/ {2,}/g, '\t')).join('\n'),
+                         delimiter: '\t', how: 'flera mellanslag' };
+            }
+            if (lines.some(l => l.indexOf(';') !== -1)) return { text: lines.join('\n'), delimiter: ';', how: 'semikolon' };
+            if (lines.some(l => l.indexOf(',') !== -1)) return { text: lines.join('\n'), delimiter: ',', how: 'kommatecken' };
+            return null;
+        }
+
+        function clearPastedTable() {
+            setVal('pasteTableInput', '');
+            setTxt('pasteTableStatus', '');
+            hideManualColumnMapping();
+        }
+
+        function handlePastedTable() {
+            const raw = getValStr('pasteTableInput', '');
+            const status = document.getElementById('pasteTableStatus');
+            const setStatus = (msg, bad) => {
+                if (!status) return;
+                status.textContent = msg;
+                status.className = bad ? 'text-[11px] text-rose-600 font-semibold' : 'text-[11px] text-emerald-600 font-semibold';
+            };
+
+            if (!raw.trim()) { setStatus('Klistra in tabellen i rutan först.', true); return; }
+
+            const norm = normalizePastedTable(raw);
+            if (!norm) {
+                setStatus('Kunde inte hitta några kolumner - kolumnerna måste skiljas åt av tabbar, flera mellanslag, semikolon eller kommatecken.', true);
+                return;
+            }
+
+            const debugLog = document.getElementById('debugLog');
+            if (debugLog) debugLog.innerHTML = '';
+            const debugConsole = document.getElementById('debugConsole');
+            if (debugConsole) debugConsole.classList.remove('hidden');
+            logDebug(`Tolkar inklistrad tabell (kolumner avgränsade med ${norm.how}).`);
+
+            setStatus('Tolkar...', false);
+            const ok = ingestTabularText(norm.text, 'inklistrad tabell', norm.delimiter);
+            if (ok) {
+                setStatus(`Klart - ${ok} rader lästes in. Kontrollera lagen i listan nedan.`, false);
+            } else if (lastIngestPresetName) {
+                setStatus(`Tabellen känns igen som ${lastIngestPresetName} - kontrollera den ifyllda kopplingen nedanför och tryck "Importera med denna koppling".`, false);
+            } else {
+                setStatus('Kolumnerna kunde inte kopplas automatiskt - koppla dem i panelen nedanför.', true);
+            }
+        }
+
         function handleCsvUpload(event) {
             const file = event.target.files[0];
             if (!file) return;
@@ -5675,16 +5791,38 @@
                     const decoded = decodeUploadedBytes(e.target.result);
                     let text = decoded.text.replace(/^\uFEFF/, "");
                     logDebug(`Filen l\u00E4stes som ${decoded.encoding}.`);
+                    ingestTabularText(text, file.name);
+                } catch (err) {
+                    logDebug(`Exception vid tolkning: ${err.message}`, true);
+                    alert("Ett fel uppstod vid inläsningen av CSV-filen. Kontrollera filens format.");
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
 
+        // Tolkar en tabell som text - samma väg oavsett om den kom från en uppladdad fil eller från
+        // inklistringsrutan. Returnerar antalet inlästa rader vid lyckad automatisk koppling, annars 0
+        // (då har kopplingspanelen öppnats i stället).
+        // forcedDelimiter sätts av inklistringen: en webbtabell normaliseras alltid till tabbar, och
+        // utan det skulle ett kommatecken i ett lagnamn kunna kapa separatordetekteringen.
+        let lastIngestPresetName = null;   // satt när en känd layout känts igen och väntar på bekräftelse
+
+        function ingestTabularText(text, sourceLabel, forcedDelimiter) {
+            lastIngestPresetName = null;
+            try {
+                {
+                    const file = { name: sourceLabel };
                     const lines = text.split(/\r\n|\r|\n/).filter(line => line.trim().length > 0);
                     if (lines.length < 2) {
-                        logDebug("Fel: CSV-filen måste innehålla minst en rubrikrad och en datarad.", true);
-                        return;
+                        logDebug("Fel: tabellen måste innehålla minst en rubrikrad och en datarad.", true);
+                        return 0;
                     }
 
                     // Detektera separator (semikolon, kommatecken eller tabulator)
-                    let delimiter = ';';
-                    if (lines[0].includes(';')) {
+                    let delimiter = forcedDelimiter || ';';
+                    if (forcedDelimiter) {
+                        /* redan avgjort av anroparen */
+                    } else if (lines[0].includes(';')) {
                         delimiter = ';';
                     } else if (lines[0].includes(',')) {
                         delimiter = ',';
@@ -5733,12 +5871,21 @@
                     const requiredMissing = [cols.squad, cols.mp, cols.gf, cols.ga].some(c => c.index === -1);
 
                     if (requiredMissing || noHeaderRow) {
+                        if (cols.squad.index === -1) {
+                            const guessedSquad = guessSquadColumn(lines.slice(dataStartIndex)
+                                .map(l => l.split(delimiter).map(c => c.trim().replace(/^["']|["']$/g, ''))));
+                            if (guessedSquad !== -1) {
+                                cols.squad = { index: guessedSquad, ambiguous: false, candidates: [guessedSquad] };
+                                pendingCsvImport.cols = cols;
+                                logDebug(`Lagnamnskolumnen gissad till kolumn ${guessedSquad} (den första som inte innehåller tal).`);
+                            }
+                        }
                         if (requiredMissing) logDebug("Kritiskt fel: Lagnamn, Matcher, GF eller GA kunde inte identifieras automatiskt.", true);
                         alert(noHeaderRow
                             ? "Filen saknar en rubrikrad, så kolumnerna måste kopplas manuellt. Panelen nedanför uppladdningsknappen visar ett exempelvärde från första raden bredvid varje kolumn för att göra det enklare."
                             : "Kunde inte identifiera alla nödvändiga kolumner automatiskt (vanligt med data från andra sajter än Understat). Koppla dem manuellt i panelen som visas nedanför uppladdningsknappen.");
                         showManualColumnMapping(headers, cols, previewRow, noHeaderRow);
-                        return;
+                        return 0;
                     }
 
                     if (cols.xg.index === -1 || cols.xga.index === -1) {
@@ -5749,12 +5896,13 @@
                     }
 
                     finalizeMainCsvImport(cols, file.name, false);
-                } catch (err) {
-                    logDebug(`Exception vid tolkning: ${err.message}`, true);
-                    alert("Ett fel uppstod vid inläsningen av CSV-filen. Kontrollera filens format.");
+                    return Math.max(0, lines.length - dataStartIndex);
                 }
-            };
-            reader.readAsArrayBuffer(file);
+            } catch (err) {
+                logDebug(`Exception vid tolkning: ${err.message}`, true);
+                alert("Ett fel uppstod vid inläsningen av tabellen. Kontrollera formatet.");
+            }
+            return 0;
         }
 
         // Slutför importen utifrån en given kolumn-koppling (antingen auto-detekterad eller manuellt vald).

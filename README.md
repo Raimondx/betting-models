@@ -19,12 +19,37 @@ ordagrant likadant.
 ## Kom igång
 
 1. Öppna HTML-filen i en webbläsare.
-2. Ladda upp en lag-CSV (Understat, FootyStats eller liknande) via **Ladda upp lag-CSV**.
-   Kolumnerna detekteras automatiskt; går det fel finns manuell kolumnkoppling.
+2. Få in lagdata, antingen genom att ladda upp en lag-CSV (Understat, FootyStats eller liknande) via
+   **Ladda upp lag-CSV**, eller genom att markera tabellen på sajten och klistra in den i **Klistra in
+   tabell från webben**. Kolumnerna detekteras automatiskt; går det fel finns manuell kolumnkoppling.
 3. Välj hemma- och bortalag, gå till **Snitt & Avancerat** och bokför spel.
 
 Vill du köra apparna från flera enheter behöver de ligga på en https-adress
 (GitHub Pages, Cloudflare Pages, Netlify). Se avsnittet om molnsynk.
+
+### Klistra in tabell från webben
+
+Vägen via ett kalkylblad är den vanligaste källan till trasig data: ett svenskt eller finskt Google
+Sheets läser `3.32` som klockslaget 3:32 och `+1.47` som en formel, så siffrorna är förstörda innan
+appen ser dem. Klistrar man in tabellen direkt i appen passerar texten aldrig ett kalkylblad.
+
+Rutan tar emot det man faktiskt får när man kopierar en webbtabell: kolumner avgränsade med tabbar
+eller med flera mellanslag i rad, med eller utan rubrikrad, med punkt eller komma som decimaltecken,
+och med hårda mellanslag och tomrader kvar. Enkla mellanslag går däremot inte att tolka — lagnamn
+innehåller dem (`K-Espoo`, `Brighton & Hove Albion`), så en sådan tabell går till manuell koppling.
+
+**FootyStats.org** (fotboll) har rubriker som känns igen automatiskt och importeras direkt.
+**liigaxg.online** (hockey) levererar tabellen *utan* rubrikrad, så den känns igen på formen i stället:
+nio kolumner där den första är ett tal, den andra text och den tredje ett rimligt matchantal. Då fylls
+kopplingen i efter sajtens kolumnordning (`placering · lag · matcher · xGF · xGA · xG-diff · GF · GA ·
+måldiff`) och "snitt per match" förkryssas, eftersom siffrorna är per match och inte säsongstotaler.
+Kopplingen importeras aldrig rakt av — panelen öppnas ifylld så att du ser vad appen tror innan något
+läses in.
+
+Att kolumn 7/8 är riktiga mål och 4/5 är xG kontrolleras mot datan i stället för att antas: mål per
+match gånger antal matcher måste landa på ett heltal, vilket xG inte gör. Testet avgör dock inte om
+layouten godtas — med ett par inklistrade rader är utfallet brus — utan varnar bara när det över
+tillräckligt många rader tydligt säger emot kolumnordningen.
 
 ---
 
