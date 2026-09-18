@@ -51,6 +51,23 @@ match gånger antal matcher måste landa på ett heltal, vilket xG inte gör. Te
 layouten godtas — med ett par inklistrade rader är utfallet brus — utan varnar bara när det över
 tillräckligt många rader tydligt säger emot kolumnordningen.
 
+I rutan finns också ett **namnfält** och en kryssruta för **snitt per match**. Namnet sparar ligan i
+webbläsaren och följer med på bokförda spel, så spelboken går att filtrera per liga i efterhand; utan
+namn bokförs spelen som "Uppladdad CSV-fil".
+
+### Snitt per match kontra totaler
+
+Appen räknar på säsongstotaler. FootyStats visar beroende på vy `1.62 mål per match` i stället för
+`49 mål på säsongen`, och läses det som en totalsumma blir varje lag ungefär trettio gånger för svagt.
+Ingenting ser trasigt ut i gränssnittet — modellen räknar bara på fel baslinje.
+
+Därför kontrolleras kvoten `gf/mp` efter varje import, oavsett om datan kom från en fil eller
+inklistringsrutan och oavsett hur kryssrutan stod. Hamnar den utanför det rimliga (fotboll ca 1.0–1.8
+mål per lag och match, hockey ca 2.5–3.5) stoppas importen: kopplingspanelen öppnas med kryssrutan
+rättad och en förklaring av vad som såg fel ut. Kontrollen går åt båda hållen — totaler som råkat
+kryssas som snitt fångas likaväl — och frågar bara en gång per import, så ett medvetet udda dataset
+går att importera ändå.
+
 ---
 
 ## De fyra modellerna

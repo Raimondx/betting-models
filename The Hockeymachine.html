@@ -185,6 +185,19 @@
             <textarea id="pasteTableInput" rows="6" autocomplete="off" spellcheck="false"
                       placeholder="Tappara&#9;3&#9;3.18&#9;2.33&#9;..."
                       class="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-mono outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <input type="text" id="pasteLeagueNameInput" autocomplete="off"
+                       placeholder="Namnge &amp; spara ligan (valfritt), t.ex. Veikkausliiga 2026"
+                       class="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+                <label class="flex items-center gap-2 text-xs text-slate-600 cursor-pointer">
+                    <input type="checkbox" id="pasteIsPerGameRate" autocomplete="off" class="rounded border-slate-300">
+                    Siffrorna är <strong>snitt per match</strong>, inte säsongstotaler
+                </label>
+            </div>
+            <p class="text-[10px] text-slate-400">
+                Namnet sparar ligan i webbläsaren och följer med på bokförda spel, så spelboken går att
+                filtrera per liga i efterhand. Utan namn bokförs spelen som "Uppladdad CSV-fil".
+            </p>
             <div class="flex flex-wrap gap-2 items-center">
                 <button onclick="handlePastedTable()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs transition-colors">
                     <i class="fa-solid fa-wand-magic-sparkles mr-1"></i> Tolka inklistrad tabell
@@ -6335,7 +6348,10 @@
             logDebug(`Tolkar inklistrad tabell (kolumner avgränsade med ${norm.how}).`);
 
             setStatus('Tolkar...', false);
-            const ok = ingestTabularText(norm.text, 'inklistrad tabell', norm.delimiter);
+            const ok = ingestTabularText(norm.text, 'inklistrad tabell', norm.delimiter, {
+                leagueNameFieldId: 'pasteLeagueNameInput',
+                isRate: !!(document.getElementById('pasteIsPerGameRate') || {}).checked
+            });
             if (ok) {
                 setStatus(`Klart - ${ok} rader lästes in. Kontrollera lagen i listan nedan.`, false);
             } else if (lastIngestPresetName) {
@@ -6379,8 +6395,9 @@
         // utan det skulle ett kommatecken i ett lagnamn kunna kapa separatordetekteringen.
         let lastIngestPresetName = null;   // satt när en känd layout känts igen och väntar på bekräftelse
 
-        function ingestTabularText(text, sourceLabel, forcedDelimiter) {
+        function ingestTabularText(text, sourceLabel, forcedDelimiter, opts) {
             lastIngestPresetName = null;
+            const options = opts || {};
             try {
                 {
                     const file = { name: sourceLabel };
@@ -6438,7 +6455,9 @@
                     });
 
                     // Spara rådata så den manuella kolumn-kopplingen (om den behövs) kan återanvända den
-                    pendingCsvImport = { lines, delimiter, headers, fileName: file.name, cols, noHeaderRow, previewRow, dataStartIndex };
+                    pendingCsvImport = { lines, delimiter, headers, fileName: file.name, cols, noHeaderRow, previewRow, dataStartIndex,
+                                         leagueNameFieldId: options.leagueNameFieldId || 'leagueNameInput',
+                                         isRate: !!options.isRate };
 
                     const requiredMissing = [cols.squad, cols.mp, cols.gf, cols.ga].some(c => c.index === -1);
 
@@ -6493,7 +6512,7 @@
                         logDebug("Ingen xPts/Points-kolumn hittad - använder standardvärde 50 för Modell 2 tills du justerar manuellt.");
                     }
 
-                    finalizeMainCsvImport(cols, file.name, false);
+                    finalizeMainCsvImport(cols, file.name, !!options.isRate);
                     return Math.max(0, lines.length - dataStartIndex);
                 }
             } catch (err) {
@@ -6583,7 +6602,42 @@
             logDebug(`Importen lyckades! ${parsedTeams.length} lag inlästa.`);
             parsedTeams.sort((a, b) => a.name.localeCompare(b.name));
 
-            const leagueName = getValStr('leagueNameInput', '').trim();
+
+            // --- SKYDD MOT SNITT-PER-MATCH SOM LÄSTS IN SOM TOTALER ---
+            // FootyStats visar beroende på vy "1.62 mål per match" i stället för "49 mål på säsongen".
+            // Läses det som en totalsumma blir varje lag ungefär trettio gånger för svagt, och hela
+            // modellen räknar på fel baslinje - utan att något ser trasigt ut i gränssnittet.
+            // Det syns däremot direkt på kvoten: mål per match (gf/mp) hamnar då på ett par hundradelar
+            // i stället för ca 2.5-3.5 i hockey. Kontrollen körs oavsett om datan kom från en fil eller
+            // inklistringsrutan, och oavsett om kryssrutan var ifylld.
+            const PLAUSIBLE_GPM = { min: 1.00, max: 7.00 };
+            const rated = parsedTeams.filter(t => t.mp >= 3 && isFinite(t.gf) && t.gf > 0);
+            if (rated.length >= 3 && !(pendingCsvImport && pendingCsvImport.rateCheckDone)) {
+                const rates = rated.map(t => t.gf / t.mp).sort((a, b) => a - b);
+                const median = rates[Math.floor(rates.length / 2)];
+                const looksPerGame = !isRate && median < PLAUSIBLE_GPM.min;
+                const looksTotals  = isRate && median > PLAUSIBLE_GPM.max;
+                if (looksPerGame || looksTotals) {
+                    if (pendingCsvImport) {
+                        pendingCsvImport.rateCheckDone = true;   // fråga en gång, lita sedan på ditt svar
+                        pendingCsvImport.isRate = looksPerGame;
+                    }
+                    const msg = looksPerGame
+                        ? `Siffrorna ser ut att vara <strong>snitt per match</strong>, inte säsongstotaler: det blir ${median.toFixed(2)} mål per match och lag, vilket är orimligt lågt. Rutan "snitt per match" är nu ikryssad - tryck "Importera med denna koppling" för att läsa in med omräkning till totaler.`
+                        : `Siffrorna ser ut att vara <strong>säsongstotaler</strong>, inte snitt per match: omräkningen ger ${median.toFixed(1)} mål per match och lag, vilket är orimligt högt. Rutan "snitt per match" är nu urkryssad - tryck "Importera med denna koppling" för att läsa in dem som totaler.`;
+                    logDebug(`Importen stoppades: ${looksPerGame ? 'snitt per match tolkades som totaler' : 'totaler tolkades som snitt per match'} (median ${median.toFixed(3)} mål/match).`, true);
+                    showManualColumnMapping(pendingCsvImport ? pendingCsvImport.headers : [], cols,
+                                            pendingCsvImport ? pendingCsvImport.previewRow : [],
+                                            pendingCsvImport ? pendingCsvImport.noHeaderRow : false,
+                                            null, msg);
+                    return;
+                }
+            }
+
+            // Inklistringsrutan har ett eget namnfält. Utan det hamnade ett inklistrat lagupplägg alltid
+            // under "Uppladdad CSV-fil" i spelboken, hur noga man än fyllde i rutan vid filuppladdningen.
+            const leagueFieldId = (pendingCsvImport && pendingCsvImport.leagueNameFieldId) || 'leagueNameInput';
+            const leagueName = getValStr(leagueFieldId, '').trim();
             let seasonKey = 'uploaded';
             let optionLabel = `📂 Uppladdad CSV-fil (${parsedTeams.length} lag)`;
 
@@ -6640,7 +6694,7 @@
         // Fallback (och alltid tillgänglig genväg) för när automatisk kolumndetektering misslyckas eller
         // gissar fel - t.ex. med data från sajter vars kolumnnamn skiljer sig från både Understat och de
         // FootyStats-mönster vi känner igen. Låter användaren peka ut rätt kolumn för varje fält för hand.
-        function showManualColumnMapping(headers, cols, previewRow, noHeaderRow, preset) {
+        function showManualColumnMapping(headers, cols, previewRow, noHeaderRow, preset, warning) {
             const panel = document.getElementById('manualMappingPanel');
             if (!panel) return;
 
@@ -6670,9 +6724,13 @@
             // En igenkänd layout förkryssar "snitt per match" åt dig - men lämnar rutan redigerbar.
             const rateBox = document.getElementById('mapIsPerGameRate');
             if (rateBox && preset) rateBox.checked = !!preset.perGameRates;
+            else if (rateBox && pendingCsvImport) rateBox.checked = !!pendingCsvImport.isRate;
             const presetNotice = document.getElementById('presetNotice');
             if (presetNotice) {
-                if (preset) {
+                if (warning) {
+                    presetNotice.innerHTML = `<i class="fa-solid fa-triangle-exclamation mr-1"></i> ${warning}`;
+                    presetNotice.className = "text-[11px] text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2";
+                } else if (preset) {
                     const swapWarning = preset.maybeSwapped
                         ? ` <strong class="text-rose-700">Obs:</strong> xG-kolumnerna ser mer ut som riktiga mål än målkolumnerna gör. Kontrollera extra noga att xG och GF/GA inte ligger omvänt i den här tabellen.`
                         : '';
