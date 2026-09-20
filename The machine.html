@@ -3632,6 +3632,61 @@
             if (box) { box.innerHTML = ''; box.className = 'hidden'; }
         }
 
+
+        // Sorterar den inlästa ligans lag efter hur likt namnet ser ut, så rätt lag hamnar högst upp i
+        // listan. Bara en SORTERING - ingenting väljs automatiskt, eftersom "FC Koln" mot "FC Cologne"
+        // är en språkskillnad som ingen teckenjämförelse kan avgöra åt en.
+        function longestCommonSubstring(a, b) {
+            if (!a || !b) return 0;
+            let best = 0;
+            const prev = new Array(b.length + 1).fill(0);
+            for (let i = 1; i <= a.length; i++) {
+                let diagonal = 0;
+                for (let j = 1; j <= b.length; j++) {
+                    const temp = prev[j];
+                    if (a[i - 1] === b[j - 1]) {
+                        prev[j] = diagonal + 1;
+                        if (prev[j] > best) best = prev[j];
+                    } else {
+                        prev[j] = 0;
+                    }
+                    diagonal = temp;
+                }
+            }
+            return best;
+        }
+
+        function rankTeamCandidates(name) {
+            const key = looseTeamName(name) || normalizeTeamName(name) || String(name || '').toLowerCase();
+            return (currentTeams || []).map(t => {
+                const other = looseTeamName(t.name) || normalizeTeamName(t.name) || '';
+                const lcs = longestCommonSubstring(key, other);
+                return { name: t.name, score: lcs / Math.max(1, Math.min(key.length, other.length)) };
+            }).sort((a, b) => b.score - a.score);
+        }
+
+        let pendingOddsAliasNames = [];
+
+        function applyOddsPasteAliases() {
+            let added = 0;
+            pendingOddsAliasNames.forEach((name, i) => {
+                const sel = document.getElementById(`oddsAlias_${i}`);
+                const target = sel ? sel.value : '';
+                if (!target) return;
+                const key = normalizeTeamName(name);
+                if (!key) return;
+                teamAliases[key] = target;
+                added++;
+            });
+            if (added === 0) {
+                alert('Inget valdes. Välj vilket lag varje namn motsvarar i listan.');
+                return;
+            }
+            saveTeamAliases();
+            if (typeof renderAliasNotice === 'function') renderAliasNotice();
+            previewPastedOdds();   // granska om med kopplingarna på plats
+        }
+
         let pendingOddsPaste = null;
 
         function previewPastedOdds() {
@@ -3651,6 +3706,7 @@
 
             const lines = raw.split(/\r\n|\r|\n/);
             const ok = [], bad = [], dupes = [];
+            const unknown = new Set();
             lines.forEach(line => {
                 if (!line.trim()) return;
                 const parsed = parseOddsTableLine(line);
@@ -3662,7 +3718,10 @@
                 const hTeam = findTeamByName(currentTeams, parsed.home);
                 const aTeam = findTeamByName(currentTeams, parsed.away);
                 if (!hTeam || !aTeam) {
-                    bad.push({ line: `${parsed.home} - ${parsed.away}`, why: !hTeam && !aTeam ? 'inget av lagen finns i den inlästa ligan' : `okänt lag: ${!hTeam ? parsed.home : parsed.away}` });
+                    // Samla namnen i stället för att bara räkna raderna: ett enda okopplat lagnamn slår
+                    // ut varenda match laget spelat, så listan över NAMN är det som går att åtgärda.
+                    if (!hTeam) unknown.add(parsed.home);
+                    if (!aTeam) unknown.add(parsed.away);
                     return;
                 }
                 const entry = { home: hTeam.name, away: aTeam.name, oh: parsed.oh, od: parsed.od, oa: parsed.oa, overround: parsed.overround };
@@ -3676,6 +3735,7 @@
             let html = `<div class="text-[11px] space-y-2">`;
             html += `<p class="font-bold text-slate-700">${ok.length} ny(a) match(er) att lägga till`
                   + (dupes.length ? `, ${dupes.length} fanns redan i loggen` : '')
+                  + (unknown.size ? `, ${unknown.size} lagnamn utan koppling` : '')
                   + (bad.length ? `, ${bad.length} rad(er) kunde inte tolkas` : '') + `.</p>`;
             if (ok.length) {
                 html += `<div class="max-h-40 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100">`;
@@ -3691,6 +3751,26 @@
                 bad.slice(0, 8).forEach(b => { html += `<div>Hoppad: <span class="font-mono">${b.line.slice(0, 60)}</span> - ${b.why}</div>`; });
                 if (bad.length > 8) html += `<div>... och ${bad.length - 8} till.</div>`;
                 html += `<div class="text-[10px] text-amber-600 mt-1">Lagnamn som skiljer sig mellan sajten och din lagtabell kan läggas till som alias i lagnamnspanelen.</div></div>`;
+            }
+            if (unknown.size) {
+                // Ett okänt namn är nästan aldrig en engångsföreteelse - samma sajt stavar likadant nästa
+                // vecka. Därför kopplas det som ett sparat alias, inte som en rättning av just den här
+                // raden. Appen gissar aldrig själv här: den sorterar bara kandidaterna efter likhet.
+                pendingOddsAliasNames = Array.from(unknown).sort();
+                html += `<div class="bg-indigo-50 border border-indigo-200 rounded-lg p-2 space-y-2">`;
+                html += `<p class="text-indigo-800"><strong>Koppla lagnamn.</strong> De här namnen finns inte i den inlästa ligan. `
+                      + `Välj vilket lag varje namn motsvarar - kopplingen sparas och gäller även nästa gång du klistrar in från samma sajt.</p>`;
+                pendingOddsAliasNames.forEach((name, i) => {
+                    const ranked = rankTeamCandidates(name);
+                    html += `<div class="flex items-center gap-2">`
+                          + `<span class="font-mono text-slate-700 w-44 shrink-0">${name}</span>`
+                          + `<select id="oddsAlias_${i}" class="flex-1 p-1 border border-slate-300 rounded text-[11px] bg-white">`
+                          + `<option value="">- välj lag -</option>`
+                          + ranked.map(c => `<option value="${c.name}">${c.name}</option>`).join('')
+                          + `</select></div>`;
+                });
+                html += `<button onclick="applyOddsPasteAliases()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs transition-colors">`
+                      + `<i class="fa-solid fa-link mr-1"></i> Spara kopplingar och granska igen</button></div>`;
             }
             if (ok.length) {
                 html += `<button onclick="commitPastedOdds()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs transition-colors">`
@@ -6818,6 +6898,44 @@
             return words.join('');
         }
 
+
+        // Samma normalisering som looseTeamName, men som ORDLISTA i stället för en hopslagen sträng.
+        function looseTeamTokens(name) {
+            return String(name || '')
+                .normalize('NFKD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]+/g, ' ')
+                .split(/\s+/)
+                .filter(w => w && !CLUB_TYPE_TOKENS.has(w));
+        }
+
+        // Olika oddssajter kortar ner samma klubb olika mycket: "Dortmund" mot "Borussia Dortmund",
+        // "RB Leipzig" mot "RasenBallsport Leipzig", "Mainz" mot "Mainz 05". Det är inte en ren
+        // suffixskillnad (som CLUB_TYPE_TOKENS fångar) utan ett helt ord som saknas eller är utskrivet.
+        //
+        // Regeln: räkna bara med BÄRANDE ord (minst fyra tecken - "05", "b" och "m" säger ingenting om
+        // vilken klubb det är). Namnen matchar om det ena namnets bärande ord i sin helhet finns i det
+        // andra. "Dortmund" ligger helt i "Borussia Dortmund", men "Manchester United" och
+        // "Manchester City" ligger inte i varandra, och "Borussia Dortmund" inte i "Borussia
+        // M.Gladbach" - delade ord räcker inte, hela sidans uppsättning måste rymmas.
+        //
+        // Träffar två olika lag lika starkt vägrar findTeamByName ändå att gissa, och hela mekanismen
+        // stängs av för en liga där strippningen slår ihop två klubbar (looseMatchingSafe).
+        function substantialTokens(name) {
+            return looseTeamTokens(name).filter(w => w.length >= 4);
+        }
+
+        function tokenSubsetMatch(a, b) {
+            const ta = substantialTokens(a);
+            const tb = substantialTokens(b);
+            if (ta.length === 0 || tb.length === 0) return false;
+            const setA = new Set(ta), setB = new Set(tb);
+            const aInB = ta.every(w => setB.has(w));
+            const bInA = tb.every(w => setA.has(w));
+            return aInB || bInA;
+        }
+
         // Om två OLIKA lag i den inlästa tabellen får samma lösa form är strippningen farlig för just den
         // ligan, och stängs av helt. Hellre missa en matchning än slå ihop två klubbar.
         let looseMatchingSafe = true;
@@ -6866,6 +6984,9 @@
                 const la = looseTeamName(a);
                 const lb = looseTeamName(b);
                 if (la && lb && la === lb) return 2;
+                // Samma nivå som den lösa formen: bägge är strukturella gissningar, och en oavgjord
+                // träff mellan två olika lag avvisas ändå av findTeamByName.
+                if (tokenSubsetMatch(a, b)) return 2;
             }
 
             const aBad = nameLooksCorrupted(a);

@@ -260,8 +260,25 @@ stängs mekanismen av för den ligan och en varning visas; hellre missa en koppl
 klubbar. Allt som inte är en ren suffixskillnad (`Brighton` vs `Brighton & Hove Albion FC`) hanteras
 med en sparad aliaslista.
 
-Matchningen returnerar en **nivå** (5 exakt · 4 alias · 3 normaliserad · 2 lös · 1 teckenfel), och
-`findTeamByName()` väljer den starkaste träffen och vägrar gissa om två lag träffar lika starkt.
+**Förkortade namn (`Dortmund` vs `Borussia Dortmund`).** Oddssajter kortar ner samma klubb olika
+mycket, och det är varken en ren suffixskillnad eller något en aliaslista borde behöva fyllas med.
+Namnen jämförs därför också som **ordmängder**, men bara på bärande ord (minst fyra tecken — `05`, `B`
+och `M` säger ingenting om vilken klubb det är). De matchar om det ena namnets bärande ord i sin helhet
+ryms i det andra: `Dortmund` ligger helt i `Borussia Dortmund`, `RB Leipzig` i `RasenBallsport Leipzig`,
+`Mainz` i `Mainz 05`. Delade ord räcker inte — hela sidans uppsättning måste rymmas — så `Manchester
+United` och `Manchester City` matchar inte varandra, och `Manchester` ensamt matchar ingen av dem
+eftersom två lag träffar lika starkt.
+
+Matchningen returnerar en **nivå** (5 exakt · 4 alias · 3 normaliserad · 2 lös/delmängd · 1 teckenfel),
+och `findTeamByName()` väljer den starkaste träffen och vägrar gissa om två lag träffar lika starkt.
+
+Kvar blir de skillnader ingen regel kan härleda: `FC Koln` mot `FC Cologne` är en språkskillnad, och
+`B. Monchengladbach` mot `Borussia M.Gladbach` en förkortning inne i ordet. Dem kopplar man för hand —
+och det görs direkt i oddsgranskningen, där okopplade namn listas med ligans lag sorterade efter likhet
+(sorterade, inte förvalda: appen gissar inte åt dig här). Kopplingen sparas som ett alias och gäller
+även nästa gång du klistrar in från samma sajt. På fjolårets Bundesliga föll 5 av 18 lagnamn utanför
+innan ordmängdsjämförelsen fanns, vilket slog ut ungefär halva säsongen; nu är det 2, och efter att de
+kopplats en gång läses alla 306 matcher in.
 
 ---
 
