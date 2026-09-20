@@ -917,6 +917,26 @@
                         <textarea id="oddsPasteInput" rows="5" autocomplete="off" spellcheck="false"
                                   placeholder="Brommapojkarna - Goteborg&#9;0:1&#9;3.12&#9;3.55&#9;2.35&#9;Yesterday"
                                   class="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-mono outline-none focus:ring-2 focus:ring-amber-500"></textarea>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Om matchen redan finns i loggen</label>
+                                <select id="oddsPasteDupeMode" autocomplete="off" class="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-amber-500">
+                                    <option value="skip">Hoppa över den</option>
+                                    <option value="replace">Ersätt med de nya oddsen</option>
+                                    <option value="wipe">Töm hela loggen först och läs in på nytt</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Årtal (om tabellen saknar det)</label>
+                                <input type="number" id="oddsPasteYear" autocomplete="off" placeholder="t.ex. 2025" min="1990" max="2100"
+                                       class="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-amber-500">
+                            </div>
+                        </div>
+                        <p class="text-[10px] text-slate-400">
+                            Sajterna skriver ofta datum utan årtal ("16.09."). Lämnas fältet tomt antas det
+                            senaste tillfället datumet inträffade. Läser du in en gammal säsong: fyll i året,
+                            annars hamnar matcherna på fel år och viktas som färska.
+                        </p>
                         <div class="flex flex-wrap gap-2 items-center">
                             <button onclick="previewPastedOdds()" class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold text-xs transition-colors">
                                 <i class="fa-solid fa-magnifying-glass mr-1"></i> Granska inklistrade odds
@@ -3577,6 +3597,57 @@
         //     allsvenska matcher från betexplorer låg den mellan 0.91 och 1.08, med median 1.03.
         //     Fönstret ska bara sålla bort trippel som plockat upp ett datum eller ett resultat, inte
         //     avgöra om oddsen är "rimliga" - marginalen visas i granskningen så du kan se den själv.
+
+        // Datumet i tabellen. Utan det blir varje inläsning "idag", och då krockar förra säsongens
+        // möte mellan två lag med den här säsongens - samma lagpar, samma dag - så den nya matchen
+        // räknades som en dubblett och föll bort. Datumet styr dessutom recency-viktningen.
+        //
+        // Mönstren är medvetet snäva. Ett odds som "3.12" ser ut som "dag 3, månad 12" om man tillåter
+        // formen utan avslutande punkt, så den formen krävs (betexplorer skriver "16.09.").
+        const MONTH_WORDS = { jan:1, feb:2, mar:3, apr:4, may:5, maj:5, jun:6, jul:7, aug:8, sep:9, oct:10, okt:10, nov:11, dec:12 };
+
+        function parseOddsDate(line, forcedYear) {
+            const s = String(line || '');
+            const pad = n => String(n).padStart(2, '0');
+            const iso = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
+            const now = new Date();
+
+            let m = s.match(/\b(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})\b/);           // 16.09.2025
+            if (m) return iso(forcedYear || +m[3], +m[2], +m[1]);
+
+            m = s.match(/\b(\d{1,2})\s+([A-Za-z]{3,})\s+(\d{4})\b/);              // 18 Sep 2026
+            if (m && MONTH_WORDS[m[2].slice(0, 3).toLowerCase()]) {
+                return iso(forcedYear || +m[3], MONTH_WORDS[m[2].slice(0, 3).toLowerCase()], +m[1]);
+            }
+
+            m = s.match(/\b(\d{1,2})[.\/](\d{1,2})\.(?!\d)/);                     // 16.09. (utan år)
+            if (m) {
+                const day = +m[1], mon = +m[2];
+                if (mon >= 1 && mon <= 12 && day >= 1 && day <= 31) {
+                    if (forcedYear) return iso(forcedYear, mon, day);
+                    // Utan årtal: närmast föregående förekomst av dagen/månaden. Ligger datumet fram i
+                    // tiden hör det till förra året.
+                    let y = now.getFullYear();
+                    if (new Date(y, mon - 1, day) > now) y -= 1;
+                    return iso(y, mon, day);
+                }
+            }
+
+            if (/\b(today|idag)\b/i.test(s)) {
+                const d = forcedYear ? new Date(forcedYear, now.getMonth(), now.getDate()) : now;
+                return iso(d.getFullYear(), d.getMonth() + 1, d.getDate());
+            }
+            if (/\b(yesterday|ig[åa]r)\b/i.test(s)) {
+                const d = new Date(now.getTime() - 86400000);
+                return iso(forcedYear || d.getFullYear(), d.getMonth() + 1, d.getDate());
+            }
+            return null;
+        }
+
+        function oddsEntryKey(home, away, date) {
+            return `${home}|${away}|${date || ''}`;
+        }
+
         const ODDS_PASTE_MIN_OVERROUND = 0.80;
         const ODDS_PASTE_MAX_OVERROUND = 1.60;
 
@@ -3623,7 +3694,8 @@
             const triple = pickOddsTriple(parseOddsNumbers(rest));
             if (!triple) return null;
 
-            return { home: home, away: away, oh: triple.oh, od: triple.od, oa: triple.oa, overround: triple.overround };
+            return { home: home, away: away, oh: triple.oh, od: triple.od, oa: triple.oa,
+                     overround: triple.overround, dateText: raw };
         }
 
         function clearPastedOdds() {
@@ -3707,6 +3779,11 @@
             const lines = raw.split(/\r\n|\r|\n/);
             const ok = [], bad = [], dupes = [];
             const unknown = new Set();
+            const dupeMode = getValStr('oddsPasteDupeMode', 'skip');
+            const wipeFirst = dupeMode === 'wipe';
+            const forcedYear = (() => { const y = getValNum('oddsPasteYear', 0); return (y >= 1990 && y <= 2100) ? y : null; })();
+            const today = new Date().toLocaleDateString('sv-SE');
+            let undated = 0;
             lines.forEach(line => {
                 if (!line.trim()) return;
                 const parsed = parseOddsTableLine(line);
@@ -3724,17 +3801,27 @@
                     if (!aTeam) unknown.add(parsed.away);
                     return;
                 }
-                const entry = { home: hTeam.name, away: aTeam.name, oh: parsed.oh, od: parsed.od, oa: parsed.oa, overround: parsed.overround };
-                // Samma match ska inte kunna loggas två gånger - annars viktas den dubbelt i Modell 2.
-                if (oddsMatchLog.some(m => m.home === entry.home && m.away === entry.away)) dupes.push(entry);
-                else ok.push(entry);
+                const readDate = parseOddsDate(parsed.dateText, forcedYear);
+                if (!readDate) undated++;
+                const date = readDate || today;
+                const entry = { home: hTeam.name, away: aTeam.name, oh: parsed.oh, od: parsed.od,
+                                oa: parsed.oa, overround: parsed.overround, date: date };
+                // Nyckeln innehåller datumet: samma lagpar möts varje säsong, och utan datum såg förra
+                // säsongens möte ut som en dubblett av den här säsongens så att den nya föll bort.
+                const clash = wipeFirst ? -1 : oddsMatchLog.findIndex(m => oddsEntryKey(m.home, m.away, m.date) === oddsEntryKey(entry.home, entry.away, entry.date));
+                if (clash !== -1) {
+                    if (dupeMode === 'replace') { entry.replacesId = oddsMatchLog[clash].id; ok.push(entry); }
+                    else dupes.push(entry);
+                } else ok.push(entry);
             });
 
             pendingOddsPaste = ok;
 
             let html = `<div class="text-[11px] space-y-2">`;
             html += `<p class="font-bold text-slate-700">${ok.length} ny(a) match(er) att lägga till`
-                  + (dupes.length ? `, ${dupes.length} fanns redan i loggen` : '')
+                  + (dupes.length ? `, ${dupes.length} fanns redan och hoppas över` : '')
+                  + (wipeFirst && oddsMatchLog.length ? `. Loggens ${oddsMatchLog.length} befintliga matcher raderas först` : '')
+                  + (dupeMode === 'replace' && ok.some(e => e.replacesId) ? `, varav ${ok.filter(e => e.replacesId).length} ersätter befintliga` : '')
                   + (unknown.size ? `, ${unknown.size} lagnamn utan koppling` : '')
                   + (bad.length ? `, ${bad.length} rad(er) kunde inte tolkas` : '') + `.</p>`;
             if (ok.length) {
@@ -3751,6 +3838,12 @@
                 bad.slice(0, 8).forEach(b => { html += `<div>Hoppad: <span class="font-mono">${b.line.slice(0, 60)}</span> - ${b.why}</div>`; });
                 if (bad.length > 8) html += `<div>... och ${bad.length - 8} till.</div>`;
                 html += `<div class="text-[10px] text-amber-600 mt-1">Lagnamn som skiljer sig mellan sajten och din lagtabell kan läggas till som alias i lagnamnspanelen.</div></div>`;
+            }
+            if (undated > 0) {
+                html += `<p class="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">`
+                      + `<i class="fa-solid fa-calendar-xmark mr-1"></i> <strong>${undated}</strong> av raderna saknar ett läsbart datum och får dagens datum. `
+                      + `De viktas då som färska av recency-viktningen, och två möten mellan samma lag utan datum räknas som samma match. `
+                      + `Kopierar du från sajten direkt brukar datumet följa med - går det via ett kalkylblad tolkas det ofta om till ett radnummer.</p>`;
             }
             if (unknown.size) {
                 // Ett okänt namn är nästan aldrig en engångsföreteelse - samma sajt stavar likadant nästa
@@ -3784,11 +3877,20 @@
 
         function commitPastedOdds() {
             if (!pendingOddsPaste || pendingOddsPaste.length === 0) return;
-            const today = new Date().toLocaleDateString('sv-SE');
+
+            const dupeMode = getValStr('oddsPasteDupeMode', 'skip');
+            if (dupeMode === 'wipe') {
+                if (!confirm(`Detta raderar loggens ${oddsMatchLog.length} befintliga matcher och läser in ${pendingOddsPaste.length} nya. Det går inte att ångra.\n\nFortsätta?`)) return;
+                oddsMatchLog = [];
+            } else if (dupeMode === 'replace') {
+                const replaced = new Set(pendingOddsPaste.map(e => e.replacesId).filter(Boolean));
+                if (replaced.size) oddsMatchLog = oddsMatchLog.filter(m => !replaced.has(m.id));
+            }
+
             pendingOddsPaste.forEach((e, i) => {
                 oddsMatchLog.unshift({
                     id: 'odds_' + Date.now() + '_' + i,
-                    date: today, home: e.home, away: e.away,
+                    date: e.date, home: e.home, away: e.away,
                     oh: e.oh, od: e.od, oa: e.oa,
                     ouLine: null, oOver: null, oUnder: null
                 });

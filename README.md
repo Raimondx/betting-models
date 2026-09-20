@@ -128,6 +128,18 @@ Lagnamnen matchas mot den inlästa ligan med samma nivåbaserade matchning som r
 listas i stället för att tyst försvinna. Inget läses in förrän du granskat listan, och matcher som redan
 finns i loggen läggs inte till igen — annars skulle de vägas dubbelt i Modell 2.
 
+**Datumet läses ur tabellen**, och det är inte kosmetik: utan datum får varje inläsning dagens datum,
+och då krockar förra säsongens möte mellan två lag med den här säsongens — samma lagpar, samma dag — så
+den nya matchen räknas som en dubblett och faller bort. Dubblettnyckeln är därför lag + lag + datum.
+Datumet styr dessutom recency-viktningen. Mönstren är snäva med flit: ett odds som `3.12` ser ut som
+"dag 3, månad 12" om formen utan avslutande punkt tillåts, så `16.09.` kräver punkten. Saknar tabellen
+årtal antas det senaste tillfället datumet inträffade — läser du in en gammal säsong, fyll i årtalet,
+annars hamnar matcherna på fel år och viktas som färska. Rader utan läsbart datum räknas och varnas för
+i granskningen i stället för att tyst hamna på dagens datum.
+
+**Vid krock väljer du själv**: hoppa över (standard), ersätt med de nya oddsen, eller töm hela loggen
+först och läs in på nytt. Det sista bekräftas separat eftersom det inte går att ångra.
+
 Bara 1X2 läses in. Modell 4 behöver dessutom Ö/U-odds, som de här tabellerna inte innehåller; de fylls i
 för hand per match. I hockeyappen ska oddsen vara 1X2 **efter ordinarie tid**, inte moneyline.
 
