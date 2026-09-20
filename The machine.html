@@ -900,6 +900,34 @@
                         </div>
                     </div>
                     <p id="oddsLogFeedback" class="text-[11px] text-slate-400 mt-2"></p>
+                    <!-- KLISTRA IN ODDSTABELL (betexplorer.com / oddsportal.com) -->
+                    <!-- Raderna tolkas på INNEHÅLL, inte på kolumnposition: sajterna lägger kolumnerna
+                         olika och en tabell klistrad som text tappar dessutom tomma celler. Se
+                         parseOddsTableLine(). -->
+                    <div class="mt-4 border-t border-slate-200 pt-4 space-y-2">
+                        <h4 class="font-bold text-xs text-slate-700 flex items-center gap-2">
+                            <i class="fa-solid fa-clipboard text-amber-500"></i> Klistra in oddstabell
+                        </h4>
+                        <p class="text-[11px] text-slate-500">
+                            Markera resultattabellen på <strong>betexplorer.com</strong> eller
+                            <strong>oddsportal.com</strong> och klistra in här. Rubrik- och omgångsrader
+                            hoppas över automatiskt, lagnamnen matchas mot den inlästa ligan, och matcher
+                            som redan finns i loggen läggs inte till igen.
+                        </p>
+                        <textarea id="oddsPasteInput" rows="5" autocomplete="off" spellcheck="false"
+                                  placeholder="Brommapojkarna - Goteborg&#9;0:1&#9;3.12&#9;3.55&#9;2.35&#9;Yesterday"
+                                  class="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg text-[11px] font-mono outline-none focus:ring-2 focus:ring-amber-500"></textarea>
+                        <div class="flex flex-wrap gap-2 items-center">
+                            <button onclick="previewPastedOdds()" class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-lg font-bold text-xs transition-colors">
+                                <i class="fa-solid fa-magnifying-glass mr-1"></i> Granska inklistrade odds
+                            </button>
+                            <button onclick="clearPastedOdds()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg font-bold text-xs transition-colors">
+                                Rensa
+                            </button>
+                        </div>
+                        <div id="oddsPastePreview" class="hidden"></div>
+                    </div>
+
                 </div>
 
                 <!-- Sammanfattning för matchens två lag -->
@@ -3534,6 +3562,167 @@
             // Förvälj matchens faktiska hemma-/bortalag för snabbhet
             if (homeStats && homeStats.name) homeSel.value = homeStats.name;
             if (awayStats && awayStats.name) awaySel.value = awayStats.name;
+        }
+
+
+        // --- INKLISTRAD ODDSTABELL (betexplorer / oddsportal) ---
+        // Sajterna lägger kolumnerna olika, och en tabell som kopieras som text tappar tomma celler så
+        // att kolumnnumren glider. Därför tolkas varje rad på INNEHÅLL:
+        //   * lagparet är den del som innehåller " - " med text på båda sidor
+        //   * oddsen är tal skrivna med decimaltecken (heltal hoppas över - oddsportal visar antalet
+        //     bookmakers som ett heltal i samma rad, och det är inte ett odds)
+        //   * rätt TRE odds hittas genom att pröva löpande trippel och behålla den första vars
+        //     overround (1/oh + 1/od + 1/oa) är rimlig. Fönstret är medvetet vitt: sajterna visar ofta
+        //     BÄSTA odds över flera bookmakers, och då kan summan hamna under 1.00. Mätt över 169
+        //     allsvenska matcher från betexplorer låg den mellan 0.91 och 1.08, med median 1.03.
+        //     Fönstret ska bara sålla bort trippel som plockat upp ett datum eller ett resultat, inte
+        //     avgöra om oddsen är "rimliga" - marginalen visas i granskningen så du kan se den själv.
+        const ODDS_PASTE_MIN_OVERROUND = 0.80;
+        const ODDS_PASTE_MAX_OVERROUND = 1.60;
+
+        function parseOddsNumbers(text) {
+            const out = [];
+            const re = /(\d+[.,]\d+)/g;
+            let m;
+            while ((m = re.exec(text)) !== null) {
+                const v = parseFloat(m[1].replace(',', '.'));
+                if (isFinite(v) && v > 1.0 && v < 1000) out.push(v);
+            }
+            return out;
+        }
+
+        function pickOddsTriple(nums) {
+            for (let i = 0; i + 2 < nums.length; i++) {
+                const [a, b, c] = [nums[i], nums[i + 1], nums[i + 2]];
+                const overround = (1 / a) + (1 / b) + (1 / c);
+                if (overround >= ODDS_PASTE_MIN_OVERROUND && overround <= ODDS_PASTE_MAX_OVERROUND) {
+                    return { oh: a, od: b, oa: c, overround: overround };
+                }
+            }
+            return null;
+        }
+
+        function parseOddsTableLine(line) {
+            const raw = String(line || '').replace(/ /g, ' ').trim();
+            if (!raw) return null;
+
+            // Omgångsrubriker ("22. Round") och kolumnrubriker ("1 X 2") innehåller inget lagpar.
+            const pair = raw.match(/([^\t|;]{2,}?)\s+[-–]\s+([^\t|;]{2,}?)(?=\t|\s{2,}|\s*\d+[:.]|$)/);
+            if (!pair) return null;
+            const home = pair[1].trim().replace(/^\d+[.)]\s*/, '').trim();
+            const away = pair[2].trim();
+            if (!home || !away) return null;
+
+            // Resultat ("0:1"), klockslag ("20:00") och datum ("16.09.", "13/09") ska inte kunna läsas
+            // som odds. Datumen är farligast: "16.09." är ett giltigt decimaltal och hamnar annars i
+            // trippeln om sajten lägger datumkolumnen före oddsen.
+            const rest = raw.slice(pair.index + pair[0].length)
+                .replace(/\b\d+\s*:\s*\d+\b/g, ' ')
+                .replace(/\b\d{1,2}[.,]\d{1,2}\.(?=\s|$)/g, ' ')
+                .replace(/\b\d{1,2}[\/-]\d{1,2}(?:[\/-]\d{2,4})?\b/g, ' ');
+            const triple = pickOddsTriple(parseOddsNumbers(rest));
+            if (!triple) return null;
+
+            return { home: home, away: away, oh: triple.oh, od: triple.od, oa: triple.oa, overround: triple.overround };
+        }
+
+        function clearPastedOdds() {
+            setVal('oddsPasteInput', '');
+            const box = document.getElementById('oddsPastePreview');
+            if (box) { box.innerHTML = ''; box.className = 'hidden'; }
+        }
+
+        let pendingOddsPaste = null;
+
+        function previewPastedOdds() {
+            const box = document.getElementById('oddsPastePreview');
+            if (!box) return;
+            const raw = getValStr('oddsPasteInput', '');
+            if (!raw.trim()) {
+                box.innerHTML = `<p class="text-[11px] text-rose-600 font-semibold">Klistra in tabellen i rutan först.</p>`;
+                box.className = '';
+                return;
+            }
+            if (!currentTeams || currentTeams.length === 0) {
+                box.innerHTML = `<p class="text-[11px] text-rose-600 font-semibold">Ingen liga är inläst - ladda upp eller klistra in lagtabellen först, annars finns inga lagnamn att matcha oddsen mot.</p>`;
+                box.className = '';
+                return;
+            }
+
+            const lines = raw.split(/\r\n|\r|\n/);
+            const ok = [], bad = [], dupes = [];
+            lines.forEach(line => {
+                if (!line.trim()) return;
+                const parsed = parseOddsTableLine(line);
+                if (!parsed) {
+                    // Rubrik- och omgångsrader är inte fel - de ska bara hoppas över tyst.
+                    if (/[-–]/.test(line) && parseOddsNumbers(line).length >= 3) bad.push({ line: line.trim(), why: 'oddsen ser inte ut som en 1X2-trippel' });
+                    return;
+                }
+                const hTeam = findTeamByName(currentTeams, parsed.home);
+                const aTeam = findTeamByName(currentTeams, parsed.away);
+                if (!hTeam || !aTeam) {
+                    bad.push({ line: `${parsed.home} - ${parsed.away}`, why: !hTeam && !aTeam ? 'inget av lagen finns i den inlästa ligan' : `okänt lag: ${!hTeam ? parsed.home : parsed.away}` });
+                    return;
+                }
+                const entry = { home: hTeam.name, away: aTeam.name, oh: parsed.oh, od: parsed.od, oa: parsed.oa, overround: parsed.overround };
+                // Samma match ska inte kunna loggas två gånger - annars viktas den dubbelt i Modell 2.
+                if (oddsMatchLog.some(m => m.home === entry.home && m.away === entry.away)) dupes.push(entry);
+                else ok.push(entry);
+            });
+
+            pendingOddsPaste = ok;
+
+            let html = `<div class="text-[11px] space-y-2">`;
+            html += `<p class="font-bold text-slate-700">${ok.length} ny(a) match(er) att lägga till`
+                  + (dupes.length ? `, ${dupes.length} fanns redan i loggen` : '')
+                  + (bad.length ? `, ${bad.length} rad(er) kunde inte tolkas` : '') + `.</p>`;
+            if (ok.length) {
+                html += `<div class="max-h-40 overflow-y-auto border border-slate-200 rounded-lg divide-y divide-slate-100">`;
+                ok.forEach(e => {
+                    html += `<div class="flex justify-between gap-2 px-2 py-1"><span class="text-slate-700">${e.home} - ${e.away}</span>`
+                          + `<span class="font-mono text-slate-500">${e.oh.toFixed(2)} / ${e.od.toFixed(2)} / ${e.oa.toFixed(2)}`
+                          + `<span class="text-slate-400"> (marginal ${((e.overround - 1) * 100).toFixed(1)}%)</span></span></div>`;
+                });
+                html += `</div>`;
+            }
+            if (bad.length) {
+                html += `<div class="text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2 space-y-0.5">`;
+                bad.slice(0, 8).forEach(b => { html += `<div>Hoppad: <span class="font-mono">${b.line.slice(0, 60)}</span> - ${b.why}</div>`; });
+                if (bad.length > 8) html += `<div>... och ${bad.length - 8} till.</div>`;
+                html += `<div class="text-[10px] text-amber-600 mt-1">Lagnamn som skiljer sig mellan sajten och din lagtabell kan läggas till som alias i lagnamnspanelen.</div></div>`;
+            }
+            if (ok.length) {
+                html += `<button onclick="commitPastedOdds()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs transition-colors">`
+                      + `<i class="fa-solid fa-check mr-1"></i> Lägg till ${ok.length} match(er) i loggen</button>`;
+            }
+            html += `<p class="text-[10px] text-slate-400">Bara 1X2-odds läses in. Modell 4 behöver dessutom Ö/U-odds, som de här tabellerna inte innehåller - de fylls i för hand per match.</p>`;
+            html += `</div>`;
+            box.innerHTML = html;
+            box.className = '';
+        }
+
+        function commitPastedOdds() {
+            if (!pendingOddsPaste || pendingOddsPaste.length === 0) return;
+            const today = new Date().toLocaleDateString('sv-SE');
+            pendingOddsPaste.forEach((e, i) => {
+                oddsMatchLog.unshift({
+                    id: 'odds_' + Date.now() + '_' + i,
+                    date: today, home: e.home, away: e.away,
+                    oh: e.oh, od: e.od, oa: e.oa,
+                    ouLine: null, oOver: null, oUnder: null
+                });
+            });
+            const n = pendingOddsPaste.length;
+            pendingOddsPaste = null;
+            lsSet('oddsMatchLog', JSON.stringify(oddsMatchLog));
+            clearPastedOdds();
+            setVal('oddsPasteInput', '');
+            renderOddsLogTable();
+            renderOddsLogSummary();
+            calculateAllModels();
+            const feedback = document.getElementById('oddsLogFeedback');
+            if (feedback) feedback.textContent = `${n} match(er) tillagda från inklistrad tabell.`;
         }
 
         function addOddsLogMatch() {

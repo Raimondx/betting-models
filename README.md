@@ -106,6 +106,31 @@ Kryssrutorna **Med i snittet** utesluter en modell ur snittet helt (modellen rä
 visas i sin egen flik). Valet sparas i `modelSettings`, alltså per enhet. Modell 4 tvingas alltid av
 vid start: den räknas bara ut på knapptryck, så dess sannolikheter är noll tills du beräknat den.
 
+### Klistra in oddstabell
+
+Oddsloggen (som driver marknads-xPts i Modell 2) har en egen inklistringsruta för resultattabeller från
+**betexplorer.com** och **oddsportal.com**. Raderna tolkas på innehåll, inte på kolumnposition: sajterna
+lägger kolumnerna olika, och en tabell kopierad som text tappar tomma celler så att kolumnnumren glider.
+
+- Lagparet är den del som innehåller ` - ` med text på båda sidor. Omgångs- och rubrikrader saknar det
+  och hoppas över tyst.
+- Oddsen är tal med decimaltecken. Heltal ignoreras — oddsportal visar antalet bookmakers i samma rad,
+  och det är inte ett odds. Resultat (`0:1`), klockslag (`20:00`) och datum (`16.09.`, `13/09`) rensas
+  bort först; datumen är farligast, eftersom `16.09` är ett giltigt decimaltal.
+- Rätt tre odds hittas genom att pröva löpande trippel och behålla den första vars overround är rimlig.
+  Fönstret (0.80–1.60) är medvetet vitt: sajterna visar ofta *bästa* odds över flera bookmakers, och då
+  kan summan hamna under 1.00 — mätt över 169 allsvenska matcher låg den mellan 0.91 och 1.08. Fönstret
+  ska sålla bort trippel som plockat upp ett datum, inte avgöra om oddsen är rimliga. Marginalen visas
+  per match i granskningen.
+
+Lagnamnen matchas mot den inlästa ligan med samma nivåbaserade matchning som resten av appen, så
+`Goteborg` hittar rätt lag även om tabellen stavar det annorlunda. Rader vars lag inte går att matcha
+listas i stället för att tyst försvinna. Inget läses in förrän du granskat listan, och matcher som redan
+finns i loggen läggs inte till igen — annars skulle de vägas dubbelt i Modell 2.
+
+Bara 1X2 läses in. Modell 4 behöver dessutom Ö/U-odds, som de här tabellerna inte innehåller; de fylls i
+för hand per match. I hockeyappen ska oddsen vara 1X2 **efter ordinarie tid**, inte moneyline.
+
 ---
 
 ## Modellbeslut som inte är uppenbara
